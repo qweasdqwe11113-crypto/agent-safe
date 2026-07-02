@@ -32,8 +32,9 @@
 
 1. 接收文本、命令内容或文件内容。
 2. 扫描其中的敏感模式。
-3. 将命中的内容替换为 `REDACTED` 等占位符。
-4. 输出清洗后的安全结果供后续处理。
+3. 将命中的内容替换为带类型的 token，例如 `[USER_EMAIL_xxxxxx]`、`[SENSITIVE_SECRET_xxxxxx]`。
+4. 可选保存 `token -> 原值` 的映射文件，便于后续恢复。
+5. 输出清洗后的安全结果供后续处理。
 
 ## 可能处理的敏感信息类别
 
@@ -51,7 +52,7 @@
 ```text
 summer_projection/
   README.md
-  plugin/
+  codex-privacy-filter/
     .codex-plugin/
       plugin.json
     scripts/
@@ -62,6 +63,68 @@ summer_projection/
   tests/
   docs/
 ```
+
+## 使用说明
+
+当前核心脚本位于 `codex-privacy-filter/scripts/redact.py`，支持普通文本和 JSON 两种输入形式。
+
+### 1. 脱敏普通文本
+
+```bash
+python codex-privacy-filter/scripts/redact.py
+```
+
+然后通过标准输入传入文本，脚本会输出脱敏后的结果。
+
+### 2. 脱敏文件内容
+
+```bash
+python codex-privacy-filter/scripts/redact.py input.txt
+```
+
+如果传入文件路径，脚本会读取该文件并输出脱敏后的内容。
+
+### 3. 保存 token 映射
+
+```bash
+python codex-privacy-filter/scripts/redact.py input.txt --map-out examples/token-map.json
+```
+
+这会：
+
+- 输出脱敏后的文本
+- 同时将 `token -> 原值` 映射保存到 `examples/token-map.json`
+
+### 4. 恢复原文
+
+```bash
+python codex-privacy-filter/scripts/redact.py redacted.txt --restore-map examples/token-map.json
+```
+
+这会根据保存下来的映射文件，将脱敏文本中的 token 恢复成原始值。
+
+### 5. 处理 JSON / 嵌套对象
+
+如果输入内容本身是合法 JSON，脚本会自动切换到递归处理模式：
+
+- 递归检查对象中的每一层字段
+- 递归检查数组中的每一项
+- 对字符串内容进行脱敏
+- 对字段名本身带有 `token`、`password`、`secret`、`auth` 等含义的值优先处理
+
+如果输入不是 JSON，脚本会自动退回到普通文本处理模式。
+
+### 6. 运行测试
+
+```bash
+python tests/test_redact.py
+```
+
+当前测试覆盖了：
+
+- 普通文本脱敏
+- JSON 递归脱敏
+- `--map-out` 与 `--restore-map` 的往返恢复
 
 ## 可修改部分
 
