@@ -1,0 +1,8 @@
+{
+  "[USER_EMAIL_973dfe]": "test@example.com",
+  "[PHONE_NUMBER_a6942f]": "13800138000",
+  "[SENSITIVE_SECRET_8d34f8]": "super-secret-token-value",
+  "[SENSITIVE_SECRET_b69722]": "bearer abcdefghijklmnopqrstuvwxyz123456",
+  "[IPV4_ADDRESS_805ebf]": "192.168.1.10",
+  "[USER_EMAIL_855f96]": "john@example.com"
+}

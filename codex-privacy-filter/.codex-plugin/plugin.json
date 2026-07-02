@@ -1,0 +1,22 @@
+{
+  "name": "codex-privacy-filter",
+  "version": "0.1.0",
+  "description": "A Codex plugin for privacy filtering and sensitive text redaction.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Privacy Filter",
+    "shortDescription": "Detect and redact sensitive text before reuse.",
+    "longDescription": "Codex Privacy Filter helps sanitize text, logs, and command content by masking secrets, tokens, passwords, and other sensitive strings during Codex workflows.",
+    "developerName": "jiahjq",
+    "category": "Productivity",
+    "capabilities": ["Write"],
+    "defaultPrompt": [
+      "Redact secrets from this log output.",
+      "Sanitize this text before sharing it.",
+      "Check whether this command contains sensitive data."
+    ]
+  }
+}
