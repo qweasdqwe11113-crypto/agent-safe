@@ -68,6 +68,22 @@ summer_projection/
 
 当前核心脚本位于 `codex-privacy-filter/scripts/redact.py`，支持普通文本和 JSON 两种输入形式。
 
+### 0. 手动运行前准备
+
+先进入项目根目录：
+
+```bash
+cd C:\Users\jiahjq\Desktop\summer_projection
+```
+
+然后确认本机可以直接使用 Python：
+
+```bash
+python --version
+```
+
+如果能看到 Python 版本号，就可以继续执行下面的命令。
+
 ### 1. 脱敏普通文本
 
 ```bash
@@ -76,34 +92,65 @@ python codex-privacy-filter/scripts/redact.py
 
 然后通过标准输入传入文本，脚本会输出脱敏后的结果。
 
+默认情况下，脱敏后的文本会直接输出到终端，不会自动保存成文件。
+
 ### 2. 脱敏文件内容
 
 ```bash
-python codex-privacy-filter/scripts/redact.py input.txt
+python codex-privacy-filter/scripts/redact.py examples/plain-input.txt
 ```
 
 如果传入文件路径，脚本会读取该文件并输出脱敏后的内容。
 
+这里的输出同样默认显示在终端。
+
 ### 3. 保存 token 映射
 
 ```bash
-python codex-privacy-filter/scripts/redact.py input.txt --map-out examples/token-map.json
+python codex-privacy-filter/scripts/redact.py examples/plain-input.txt --map-out examples/plain-token-map.json
 ```
 
 这会：
 
 - 输出脱敏后的文本
-- 同时将 `token -> 原值` 映射保存到 `examples/token-map.json`
+- 同时将 `token -> 原值` 映射保存到 `examples/plain-token-map.json`
 
 ### 4. 恢复原文
 
 ```bash
-python codex-privacy-filter/scripts/redact.py redacted.txt --restore-map examples/token-map.json
+python codex-privacy-filter/scripts/redact.py examples/plain-redacted.txt --restore-map examples/plain-token-map.json
 ```
 
 这会根据保存下来的映射文件，将脱敏文本中的 token 恢复成原始值。
 
-### 5. 处理 JSON / 嵌套对象
+恢复后的文本默认也会输出到终端。
+
+### 5. 将脱敏结果保存到文件
+
+如果你不只想在终端中查看结果，而是希望把脱敏后的正文保存到文件，可以使用重定向：
+
+```bash
+python codex-privacy-filter/scripts/redact.py examples/plain-input.txt > examples/plain-redacted.txt
+```
+
+如果你想同时保存脱敏正文和 token 映射，可以这样运行：
+
+```bash
+python codex-privacy-filter/scripts/redact.py examples/plain-input.txt --map-out examples/plain-token-map.json > examples/plain-redacted.txt
+```
+
+此时输出位置如下：
+
+- 脱敏后的正文保存到 `examples/plain-redacted.txt`
+- `token -> 原值` 映射保存到 `examples/plain-token-map.json`
+
+### 6. 处理 JSON / 嵌套对象
+
+例如：
+
+```bash
+python codex-privacy-filter/scripts/redact.py examples/json-input.json
+```
 
 如果输入内容本身是合法 JSON，脚本会自动切换到递归处理模式：
 
@@ -114,7 +161,7 @@ python codex-privacy-filter/scripts/redact.py redacted.txt --restore-map example
 
 如果输入不是 JSON，脚本会自动退回到普通文本处理模式。
 
-### 6. 运行测试
+### 7. 运行测试
 
 ```bash
 python tests/test_redact.py
@@ -172,7 +219,9 @@ python tests/test_redact.py
 - `codex-privacy-filter/.codex-plugin/plugin.json`
   用于修改插件名称、版本号、简介、界面展示信息和默认提示词。
 - `codex-privacy-filter/scripts/redact.py`
-  这是核心脱敏逻辑所在文件，可以在这里增删正则规则、调整敏感信息类型、优化 token 命名方式，或者进一步加入 JSON 递归处理与映射保存能力。
+  这是命令行入口文件，可以在这里调整输入输出方式、命令行参数或者脚本调用流程。
+- `codex-privacy-filter/core/`
+  这是当前核心脱敏逻辑所在目录，可以在这里增删正则规则、调整敏感信息类型、优化 token 命名方式，或者继续扩展 JSON 递归处理与映射保存能力。
 - `codex-privacy-filter/skills/SKILL.md`
   用于修改插件在 Codex 中的使用说明，例如适用场景、调用方式和注意事项。
 - `examples/`
