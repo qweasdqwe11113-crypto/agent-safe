@@ -1,0 +1,14 @@
+{
+  "user": {
+    "email": "test@example.com",
+    "phone": "13800138000"
+  },
+  "authToken": "super-secret-token-value",
+  "headers": {
+    "authorization": "bearer abcdefghijklmnopqrstuvwxyz123456"
+  },
+  "notes": [
+    "server ip is 192.168.1.10",
+    "contact john@example.com"
+  ]
+}

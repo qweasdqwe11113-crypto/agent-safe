@@ -1,0 +1,14 @@
+{
+  "user": {
+    "email": "[USER_EMAIL_973dfe]",
+    "phone": "[PHONE_NUMBER_a6942f]"
+  },
+  "authToken": "[SENSITIVE_SECRET_8d34f8]",
+  "headers": {
+    "authorization": "[SENSITIVE_SECRET_b69722]"
+  },
+  "notes": [
+    "server ip is [IPV4_ADDRESS_805ebf]",
+    "contact [USER_EMAIL_855f96]"
+  ]
+}

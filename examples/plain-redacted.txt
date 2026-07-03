@@ -1,0 +1,5 @@
+email=[USER_EMAIL_973dfe]
+phone=[PHONE_NUMBER_a6942f]
+api_key=[SENSITIVE_SECRET_47ab9d]
+authorization: bearer [AUTH_TOKEN_8d34f8]
+github=[GITHUB_TOKEN_1db61e]

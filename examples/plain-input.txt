@@ -1,0 +1,5 @@
+email=test@example.com
+phone=13751073710
+api_key=sk-abc123def456ghi789jkl012mno345
+authorization: bearer super-secret-token-value
+github=ghp_1234567890abcdefghijklmnopqrstuvwxyz
