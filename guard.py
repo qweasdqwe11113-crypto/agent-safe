@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import argparse
+import os
+import shutil
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -77,6 +80,19 @@ def parse_args() -> argparse.Namespace:
         help="Optional output file path used to save the final content selected by the wrapper.",
     )
     parser.add_argument(
+        "--codex",
+        action="store_true",
+        help="After wrapper review, automatically call `codex exec` with the prepared content file.",
+    )
+    parser.add_argument(
+        "--codex-profile",
+        help="Optional Codex profile name passed to `codex exec --profile`.",
+    )
+    parser.add_argument(
+        "--codex-output",
+        help="Optional file path used to save the last message returned by `codex exec`.",
+    )
+    parser.add_argument(
         "--override",
         choices=("allow", "mask", "block"),
         help="Optional final action chosen by the user to override the suggested action.",
@@ -93,6 +109,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--override-reason requires --override.")
     if args.review and args.override:
         parser.error("Use either --review or --override, not both.")
+    if args.codex_output and not args.codex:
+        parser.error("--codex-output requires --codex.")
+    if args.codex_profile and not args.codex:
+        parser.error("--codex-profile requires --codex.")
+    if args.codex and not args.out:
+        parser.error("--codex requires --out so Codex has a prepared file to consume.")
 
     return args
 
@@ -237,6 +259,48 @@ def format_report(
     return "\n".join(sections)
 
 
+def build_codex_prompt(output_path: Path, final_action: str) -> str:
+    mode_text = "approved original" if final_action == "allow" else "sanitized"
+    absolute_output_path = output_path.resolve()
+    file_name = absolute_output_path.name
+    return (
+        f"Please analyze the {mode_text} content in this file: "
+        f"[{file_name}](<{absolute_output_path}>). "
+        f"Absolute path: {absolute_output_path}. "
+        "Treat this file as the approved context prepared by Agent Privacy Guard."
+    )
+
+
+def run_codex_exec(
+    output_path: Path,
+    final_action: str,
+    codex_output: str | None,
+    codex_profile: str | None,
+) -> subprocess.CompletedProcess:
+    codex_executable = shutil.which("codex.cmd") or shutil.which("codex.exe") or shutil.which("codex")
+    if not codex_executable:
+        raise FileNotFoundError(
+            "Could not find Codex CLI executable. Make sure `codex` is installed and available in PATH."
+        )
+
+    command = [
+        codex_executable,
+        "exec",
+    ]
+    if codex_profile:
+        command.extend(["--profile", codex_profile])
+    command.extend(
+        [
+            build_codex_prompt(output_path, final_action),
+            "-C",
+            str(PROJECT_ROOT),
+        ]
+    )
+    if codex_output:
+        command.extend(["-o", codex_output])
+    return subprocess.run(command, text=True, check=True, env=os.environ.copy())
+
+
 def main() -> int:
     args = parse_args()
     text = read_input(args)
@@ -267,19 +331,33 @@ def main() -> int:
             )
         )
 
-    if args.out:
-        output_path = Path(args.out)
+    output_path = Path(args.out) if args.out else None
+    wrote_output = False
+    if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if final_action == "allow":
             output_path.write_text(text, encoding="utf-8")
             sys.stdout.write(f"\nOutput File: {output_path}\n")
+            wrote_output = True
         elif final_action == "mask":
             output_path.write_text(redacted_text, encoding="utf-8")
             sys.stdout.write(f"\nOutput File: {output_path}\n")
+            wrote_output = True
         else:
             if output_path.exists():
                 output_path.unlink()
             sys.stdout.write(f"\nOutput File: not written because final action is BLOCK\n")
+
+    if args.codex:
+        if final_action == "block":
+            sys.stdout.write("Codex Exec: skipped because final action is BLOCK\n")
+        elif output_path and wrote_output:
+            run_codex_exec(output_path, final_action, args.codex_output, args.codex_profile)
+            sys.stdout.write("Codex Exec: launched successfully\n")
+            if args.codex_profile:
+                sys.stdout.write(f"Codex Profile: {args.codex_profile}\n")
+            if args.codex_output:
+                sys.stdout.write(f"Codex Output File: {args.codex_output}\n")
     return 0
 
 

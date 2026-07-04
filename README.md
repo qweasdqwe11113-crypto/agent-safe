@@ -27,6 +27,8 @@
 - 一个基于 Python 的脱敏脚本 `codex-privacy-filter/scripts/redact.py`
 - 一组基于正则表达式的基础检测规则
 - review / override 的终端预览流程
+- `--out` 输出安全文件
+- `--codex` 自动调用 `codex exec`
 - 本地测试与示例文件
 
 ## 设计思路
@@ -40,7 +42,7 @@
 3. 根据 profile 自动生成建议动作 `allow / mask / block`。
 4. 展示发送前预览，包括原始内容、命中项和脱敏后内容。
 5. 用户接受建议，或通过 override 修改最终动作。
-6. 输出最终决策结果和安全版本内容，供后续 Agent 使用。
+6. 输出最终决策结果和安全版本内容，供后续 Agent 或 Codex 使用。
 
 ## 可能处理的敏感信息类别
 
@@ -61,6 +63,7 @@
 summer_projection/
   README.md
   guard.py
+  outputs/
   codex-privacy-filter/
     .codex-plugin/
       plugin.json
@@ -79,7 +82,7 @@ summer_projection/
 
 ## CLI Wrapper 使用说明
 
-当前主线入口是 `guard.py`。它实现的是“发送前预览”式保护，而不是直接把内容自动转发给 Agent。
+当前主线入口是 `guard.py`。它实现的是“发送前预览”式保护，而不是直接把内容无条件转发给 Agent。
 
 ### 0. 手动运行前准备
 
@@ -89,13 +92,11 @@ summer_projection/
 cd C:\Users\jiahjq\Desktop\summer_projection
 ```
 
-然后确认本机可以直接使用 Python：
+确认本机可以直接使用 Python：
 
 ```bash
 python --version
 ```
-
-如果能看到 Python 版本号，就可以继续执行下面的命令。
 
 ### 1. 处理文件输入
 
@@ -131,7 +132,7 @@ password=MySecret123
 
 ### 3. 交互式 review
 
-如果你希望先看预览，再决定最终动作，可以使用：
+如果希望先看预览，再决定最终动作，可以使用：
 
 ```bash
 python guard.py examples/plain-input.txt --profile coding --review
@@ -147,13 +148,59 @@ python guard.py examples/plain-input.txt --profile coding --review
 
 ### 4. 非交互 override
 
-如果你不走交互 review，也可以直接在命令行里覆盖建议动作：
+如果不走交互 review，也可以直接在命令行里覆盖建议动作：
 
 ```bash
 python guard.py examples/plain-input.txt --profile coding --override mask --override-reason "demo approval"
 ```
 
-### 5. 支持的 profile
+### 5. 输出到文件
+
+推荐把 wrapper 的产物统一写到 `outputs/` 目录下：
+
+```bash
+python guard.py examples/plain-input.txt --profile coding --review --out outputs/safe.txt
+```
+
+这条命令的行为是：
+
+- 如果最终动作是 `allow`，则将原文写入 `outputs/safe.txt`
+- 如果最终动作是 `mask`，则将脱敏后的内容写入 `outputs/safe.txt`
+- 如果最终动作是 `block`，则不会写出 `outputs/safe.txt`
+
+### 6. 自动交给 Codex
+
+如果希望在生成安全文件后自动调用 Codex，可以这样运行：
+
+```bash
+python guard.py examples/plain-input.txt --profile coding --review --out outputs/safe.txt --codex --codex-output outputs/codex-result.txt
+```
+
+当前这条链路已经在本机验证通过，运行后会发生：
+
+1. `guard.py` 对原始内容做检测与 review
+2. 根据最终动作写出 `outputs/safe.txt`
+3. 自动调用 `codex exec`
+4. Codex 读取 `outputs/safe.txt`
+5. 把 Codex 最后一条回复写到 `outputs/codex-result.txt`
+
+成功的完整链路如下：
+
+```text
+input.txt
+  -> guard.py --review --out outputs/safe.txt
+  -> outputs/safe.txt
+  -> codex exec
+  -> outputs/codex-result.txt
+```
+
+说明：
+
+- 当最终动作是 `mask` 时，Codex 实际看到的是脱敏后的内容
+- 当最终动作是 `allow` 时，Codex 实际看到的是原始内容
+- 当最终动作是 `block` 时，不会写出 `safe.txt`，也不会自动调用 Codex
+
+### 7. 支持的 profile
 
 当前提供三个基础 profile：
 
@@ -167,10 +214,10 @@ python guard.py examples/plain-input.txt --profile coding --override mask --over
 - 命中 PII 或网络类内容时，优先建议 `mask`
 - 未命中规则时，建议 `allow`
 
-### 6. 运行测试
+### 8. 运行测试
 
 ```bash
-python -m unittest tests.test_redact tests.test_guard tests.test_guard_override
+python -m unittest tests.test_redact tests.test_guard tests.test_guard_override tests.test_guard_codex
 ```
 
 当前测试覆盖了：
@@ -180,6 +227,8 @@ python -m unittest tests.test_redact tests.test_guard tests.test_guard_override
 - `--map-out` 与 `--restore-map` 的往返恢复
 - `guard.py` 的文件输入与标准输入
 - review / override 逻辑中的建议动作与最终动作分离
+- `--out` 文件输出行为
+- `--codex` 命令拼装与参数校验
 
 ## 脱敏脚本使用说明
 
@@ -219,6 +268,8 @@ python codex-privacy-filter/scripts/redact.py examples/plain-redacted.txt --rest
   - 扫描敏感内容并生成建议动作
   - 展示原始内容和脱敏后内容
   - 支持 review / override
+  - 输出安全文件
+  - 自动调用 Codex
 - `codex-privacy-filter/core/redactor.py`
   负责核心脱敏逻辑。主要功能包括：
   - 定义敏感信息识别规则
@@ -226,47 +277,32 @@ python codex-privacy-filter/scripts/redact.py examples/plain-redacted.txt --rest
   - 递归处理 JSON、列表和嵌套对象
   - 生成类型化 token，例如 `[USER_EMAIL_xxxxxx]`
 - `codex-privacy-filter/core/vault.py`
-  负责 token 映射的保存、读取和恢复。主要功能包括：
-  - 将 `token -> 原值` 保存为 JSON 文件
-  - 从 JSON 文件中重新读取映射
-  - 根据映射将脱敏文本恢复为原始文本
+  负责 token 映射的保存、读取和恢复。
 - `codex-privacy-filter/core/utils.py`
-  负责通用辅助函数。主要功能包括：
-  - 生成 token 哈希值
-  - 生成标准 token 格式
-  - 判断字段名是否属于敏感字段
+  负责通用辅助函数。
 - `codex-privacy-filter/scripts/redact.py`
-  负责底层命令行脱敏入口。主要功能包括：
-  - 接收文件输入或标准输入
-  - 调用 `redactor` 完成脱敏
-  - 调用 `vault` 保存映射或恢复原文
+  负责底层命令行脱敏入口。
 - `tests/test_redact.py`
   负责基础脱敏测试。
 - `tests/test_guard.py`
   负责 wrapper 文件输入与标准输入测试。
 - `tests/test_guard_override.py`
   负责 override 行为测试。
-
-这种拆分方式的好处是：
-
-- wrapper 层和脱敏核心分离，便于后续接入真正 Agent
-- 脱敏逻辑和文件读写逻辑分开，后续更容易维护
-- 映射保存与恢复逻辑独立，后面更容易升级成真正的 vault
-- 工具函数集中管理，避免核心逻辑里堆太多杂项代码
-- 测试可以更容易按模块扩展
+- `tests/test_guard_codex.py`
+  负责 Codex 调用参数拼装测试。
 
 ## 可修改部分
 
 在后续开发和迭代中，最常需要修改的部分主要有以下几类：
 
 - `guard.py`
-  这是当前主线 wrapper 入口，可以在这里调整 review 流程、最终动作决策、profile 行为以及后续真实 Agent 转发逻辑。
+  当前主线 wrapper 入口，可以在这里调整 review 流程、最终动作决策、profile 行为以及后续真实 Agent 转发逻辑。
 - `codex-privacy-filter/.codex-plugin/plugin.json`
   用于修改 Codex 插件实验的名称、版本号、简介、界面展示信息和默认提示词。
 - `codex-privacy-filter/scripts/redact.py`
-  这是底层命令行入口文件，可以在这里调整输入输出方式、命令行参数或者脚本调用流程。
+  底层命令行入口文件，可以在这里调整输入输出方式、命令行参数或者脚本调用流程。
 - `codex-privacy-filter/core/`
-  这是当前核心脱敏逻辑所在目录，可以在这里增删正则规则、调整敏感信息类型、优化 token 命名方式，或者继续扩展 JSON 递归处理与映射保存能力。
+  当前核心脱敏逻辑所在目录，可以在这里增删正则规则、调整敏感信息类型、优化 token 命名方式，或者继续扩展 JSON 递归处理与映射保存能力。
 - `codex-privacy-filter/skills/SKILL.md`
   用于修改 Codex 插件实验在 Codex 中的使用说明。
 - `examples/`
@@ -281,8 +317,9 @@ python codex-privacy-filter/scripts/redact.py examples/plain-redacted.txt --rest
 1. 完成底层脱敏脚本和基础正则规则。
 2. 完成 CLI wrapper 主线和发送前预览。
 3. 为 `allow / mask / block` 与 override 补充交互流程。
-4. 为 `coding / office / finance` 三类场景补充样例和文档。
-5. 继续优化识别准确率，减少误报和漏报。
+4. 将 wrapper 与 Codex 的自动续跑链路接通。
+5. 为 `coding / office / finance` 三类场景补充样例和文档。
+6. 继续优化识别准确率，减少误报和漏报。
 
 ## 风险与挑战
 
@@ -304,18 +341,20 @@ python codex-privacy-filter/scripts/redact.py examples/plain-redacted.txt --rest
 - 已支持系统自动给出 `allow / mask / block` 建议动作
 - 已支持发送前预览 `Original Content / Redacted Content`
 - 已支持用户接受建议或执行 override
+- 已支持将最终结果写出到 `outputs/safe.txt`
+- 已支持自动调用 `codex exec`
+- 已验证 `guard.py -> outputs/safe.txt -> codex exec -> outputs/codex-result.txt` 链路可用
 - 已完成 `redactor / vault / utils / scripts` 的基础模块拆分
 - 已补充基础测试，并验证普通文本、JSON 递归处理以及 wrapper 行为可以正常工作
-- 已补充 `examples/` 样例文件，能够展示输入、脱敏输出和 token 映射之间的对应关系
 
-目前项目已经从“单一脚本演示”推进到了“具备 CLI wrapper、发送前预览和用户决策流程的原型”阶段。
+目前项目已经从“单一脚本演示”推进到了“具备 CLI wrapper、发送前预览、用户决策流程和 Codex 自动续跑能力的原型”阶段。
 
 ## 下一步工作
 
 - 增加审计日志持久化
 - 为 `coding / office / finance` 三类场景补充更完整样例
-- 将 wrapper 与真实 Agent 调用流程接通
 - 继续优化误报和漏报
+- 评估是否扩展到更多 Agent 或代理方式
 
 ## 说明
 
