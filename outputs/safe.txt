@@ -1,5 +1,1 @@
-email=[USER_EMAIL_973dfe]
-phone=[PHONE_NUMBER_d15fe7]
-api_key=[SENSITIVE_SECRET_47ab9d]
-authorization: bearer [AUTH_TOKEN_8d34f8]
-github=[GITHUB_TOKEN_1db61e]
+my telephone is [PHONE_NUMBER_d15fe7]，and i want to ask what is 1+1

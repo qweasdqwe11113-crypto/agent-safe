@@ -13,6 +13,7 @@ if str(PLUGIN_ROOT) not in sys.path:
     sys.path.insert(0, str(PLUGIN_ROOT))
 
 from core.redactor import redact_text  # noqa: E402
+from core.vault import restore_string, save_token_map  # noqa: E402
 
 
 PROFILE_POLICIES = {
@@ -271,6 +272,26 @@ def build_codex_prompt(output_path: Path, final_action: str) -> str:
     )
 
 
+def build_artifact_path(base_path: Path, file_name: str) -> Path:
+    return base_path.parent / file_name
+
+
+def write_guard_artifacts(
+    output_path: Path,
+    original_text: str,
+    token_map: dict[str, str],
+) -> tuple[Path, Path | None]:
+    original_path = build_artifact_path(output_path, "original.txt")
+    original_path.write_text(original_text, encoding="utf-8")
+
+    token_map_path = None
+    if token_map:
+        token_map_path = build_artifact_path(output_path, "token-map.json")
+        save_token_map(token_map, str(token_map_path))
+
+    return original_path, token_map_path
+
+
 def run_codex_exec(
     output_path: Path,
     final_action: str,
@@ -299,6 +320,14 @@ def run_codex_exec(
     if codex_output:
         command.extend(["-o", codex_output])
     return subprocess.run(command, text=True, check=True, env=os.environ.copy())
+
+
+def restore_codex_output(codex_output_path: Path, token_map: dict[str, str]) -> Path:
+    restored_path = build_artifact_path(codex_output_path, "codex-result-restored.txt")
+    raw_text = codex_output_path.read_text(encoding="utf-8")
+    restored_text = restore_string(raw_text, token_map) if token_map else raw_text
+    restored_path.write_text(restored_text, encoding="utf-8")
+    return restored_path
 
 
 def main() -> int:
@@ -333,8 +362,11 @@ def main() -> int:
 
     output_path = Path(args.out) if args.out else None
     wrote_output = False
+    token_map_path = None
+    original_path = None
     if output_path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        original_path, token_map_path = write_guard_artifacts(output_path, text, token_map)
         if final_action == "allow":
             output_path.write_text(text, encoding="utf-8")
             sys.stdout.write(f"\nOutput File: {output_path}\n")
@@ -347,6 +379,10 @@ def main() -> int:
             if output_path.exists():
                 output_path.unlink()
             sys.stdout.write(f"\nOutput File: not written because final action is BLOCK\n")
+        if original_path:
+            sys.stdout.write(f"Original File: {original_path}\n")
+        if token_map_path:
+            sys.stdout.write(f"Token Map File: {token_map_path}\n")
 
     if args.codex:
         if final_action == "block":
@@ -358,6 +394,10 @@ def main() -> int:
                 sys.stdout.write(f"Codex Profile: {args.codex_profile}\n")
             if args.codex_output:
                 sys.stdout.write(f"Codex Output File: {args.codex_output}\n")
+                codex_output_path = Path(args.codex_output)
+                if codex_output_path.exists():
+                    restored_path = restore_codex_output(codex_output_path, token_map)
+                    sys.stdout.write(f"Codex Restored Output File: {restored_path}\n")
     return 0
 
 

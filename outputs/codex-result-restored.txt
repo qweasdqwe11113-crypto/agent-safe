@@ -1,6 +1,6 @@
 The sanitized content contains two parts:
 
-1. A phone number was present and has been redacted as `[PHONE_NUMBER_d15fe7]`.
+1. A phone number was present and has been redacted as `13751073710`.
 2. The remaining user request is: “what is 1+1”.
 
 Answer to the non-sensitive request: `1+1 = 2`.

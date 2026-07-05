@@ -1,4 +1,5 @@
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -72,6 +73,37 @@ class GuardCodexTests(unittest.TestCase):
                 ],
             ):
                 guard.parse_args()
+
+    def test_write_guard_artifacts_saves_original_and_token_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "safe.txt"
+            token_map = {"[USER_EMAIL_123abc]": "test@example.com"}
+
+            original_path, token_map_path = guard.write_guard_artifacts(
+                output_path,
+                "email=test@example.com\n",
+                token_map,
+            )
+
+            self.assertEqual(original_path.read_text(encoding="utf-8"), "email=test@example.com\n")
+            self.assertIsNotNone(token_map_path)
+            self.assertIn("[USER_EMAIL_123abc]", token_map_path.read_text(encoding="utf-8"))
+
+    def test_restore_codex_output_replaces_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            codex_output_path = Path(tmpdir) / "codex-result.txt"
+            codex_output_path.write_text(
+                "The email placeholder is [USER_EMAIL_123abc].\n",
+                encoding="utf-8",
+            )
+
+            restored_path = guard.restore_codex_output(
+                codex_output_path,
+                {"[USER_EMAIL_123abc]": "test@example.com"},
+            )
+
+            self.assertEqual(restored_path.name, "codex-result-restored.txt")
+            self.assertIn("test@example.com", restored_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
