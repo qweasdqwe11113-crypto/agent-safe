@@ -1,10 +1,11 @@
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import subprocess
 
 import guard
+from codex_client import extract_assistant_reply
 
 
 class GuardCodexTests(unittest.TestCase):
@@ -13,22 +14,18 @@ class GuardCodexTests(unittest.TestCase):
         self.assertIn(r"C:\temp\safe.txt", prompt)
         self.assertIn("sanitized", prompt)
 
-    @patch("guard.subprocess.run")
+    @patch("guard.run_codex_turn")
     def test_run_codex_exec_passes_output_file(self, mock_run) -> None:
-        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0)
-        output_path = Path(r"C:\temp\safe.txt")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "safe.txt"
+            codex_output_path = Path(tmpdir) / "codex-result.txt"
 
-        guard.run_codex_exec(output_path, "mask", r"C:\temp\codex-result.txt", "rightcode")
+            guard.run_codex_exec(output_path, "mask", str(codex_output_path), "rightcode")
 
-        command = mock_run.call_args.args[0]
-        self.assertEqual(command[1], "exec")
-        self.assertTrue(command[0].lower().endswith(("codex.cmd", "codex.exe", "codex")))
-        self.assertIn("--profile", command)
-        self.assertIn("rightcode", command)
-        self.assertIn(str(output_path), " ".join(command))
-        self.assertIn("-o", command)
-        self.assertIn(r"C:\temp\codex-result.txt", command)
-        self.assertIn("env", mock_run.call_args.kwargs)
+            prompt = mock_run.call_args.args[0]
+            self.assertIn(str(output_path), prompt)
+            self.assertEqual(mock_run.call_args.args[1], codex_output_path)
+            self.assertEqual(mock_run.call_args.args[2], "rightcode")
 
     def test_codex_output_requires_codex_flag(self) -> None:
         with self.assertRaises(SystemExit):
@@ -104,6 +101,41 @@ class GuardCodexTests(unittest.TestCase):
 
             self.assertEqual(restored_path.name, "codex-result-restored.txt")
             self.assertIn("test@example.com", restored_path.read_text(encoding="utf-8"))
+
+    def test_extract_assistant_reply_reads_last_codex_block(self) -> None:
+        stdout = (
+            "OpenAI Codex v0.132.0\n"
+            "user\n"
+            "hi\n"
+            "codex\n"
+            "first reply\n"
+            "tokens used\n"
+            "123\n"
+            "codex\n"
+            "second reply line 1\n"
+            "second reply line 2\n"
+            "tokens used\n"
+            "456\n"
+        )
+        self.assertEqual(extract_assistant_reply(stdout), "second reply line 1\nsecond reply line 2")
+
+    @patch("guard.run_codex_turn")
+    def test_run_codex_exec_writes_fallback_output_when_file_missing(self, mock_run) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "safe.txt"
+            output_path.write_text("safe", encoding="utf-8")
+            codex_output_path = Path(tmpdir) / "codex-result.txt"
+            mock_run.return_value = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="codex\nfallback reply\ntokens used\n123\n",
+                stderr="",
+            )
+
+            guard.run_codex_exec(output_path, "mask", str(codex_output_path), None)
+
+            self.assertTrue(codex_output_path.exists())
+            self.assertEqual(codex_output_path.read_text(encoding="utf-8"), "fallback reply")
 
 
 if __name__ == "__main__":

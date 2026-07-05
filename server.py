@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlparse
+from dataclasses import asdict
+
+from guard_core import PROFILE_POLICIES, RISK_LEVELS, apply_final_action, build_preview, restore_response, scan_text
+from model_client import ModelClient, ModelClientError
+from session_state import SessionState, TurnRecord, append_turn, load_session, save_session_log
+
+
+class SessionStore:
+    def __init__(self, base_dir: Path) -> None:
+        self.base_dir = base_dir
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self.sessions: dict[str, SessionState] = {}
+
+    def create_session(self, profile: str, session_id: str | None = None) -> SessionState:
+        session = SessionState.create(profile, self.base_dir, session_id)
+        self.sessions[session.session_id] = session
+        save_session_log(session)
+        return session
+
+    def get_session(self, session_id: str) -> SessionState | None:
+        if session_id in self.sessions:
+            return self.sessions[session_id]
+
+        session_json = self.base_dir / session_id / "session.json"
+        if session_json.exists():
+            session = load_session(session_json)
+            self.sessions[session_id] = session
+            return session
+        return None
+
+
+def build_turn_file_paths(session: SessionState, turn_id: int) -> dict[str, Path]:
+    prefix = f"turn-{turn_id:03d}"
+    return {
+        "user_original": session.session_path / f"{prefix}-user-original.txt",
+        "user_safe": session.session_path / f"{prefix}-user-safe.txt",
+        "token_map": session.session_path / f"{prefix}-token-map.json",
+        "model_raw": session.session_path / f"{prefix}-model-raw.json",
+        "assistant_raw": session.session_path / f"{prefix}-assistant-raw.txt",
+        "assistant_restored": session.session_path / f"{prefix}-assistant-restored.txt",
+    }
+
+
+class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
+    server: "GuardHTTPServer"
+
+    def log_message(self, format: str, *args) -> None:
+        return
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path == "/health":
+            self._write_json(HTTPStatus.OK, {"status": "ok"})
+            return
+
+        if path == "/profiles":
+            self._write_json(HTTPStatus.OK, {"profiles": sorted(PROFILE_POLICIES)})
+            return
+
+        if path.startswith("/sessions/"):
+            session_id = path.split("/")[2] if len(path.split("/")) > 2 else ""
+            session = self.server.session_store.get_session(session_id)
+            if session is None:
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": "Session not found"})
+                return
+
+            if path.endswith("/turns"):
+                self._write_json(HTTPStatus.OK, {"turns": [asdict(turn) for turn in session.turns]})
+                return
+
+            self._write_json(HTTPStatus.OK, session.to_dict())
+            return
+
+        self._write_json(HTTPStatus.NOT_FOUND, {"error": "Route not found"})
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        payload = self._read_json_body()
+        if payload is None:
+            return
+
+        if path == "/sessions":
+            self._handle_create_session(payload)
+            return
+
+        if path.startswith("/sessions/") and path.endswith("/preview"):
+            session_id = path.split("/")[2]
+            self._handle_preview(session_id, payload)
+            return
+
+        if path.startswith("/sessions/") and path.endswith("/messages"):
+            session_id = path.split("/")[2]
+            self._handle_message(session_id, payload)
+            return
+
+        self._write_json(HTTPStatus.NOT_FOUND, {"error": "Route not found"})
+
+    def _handle_create_session(self, payload: dict) -> None:
+        profile = payload.get("profile")
+        if profile not in PROFILE_POLICIES:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": f"Invalid profile: {profile}"})
+            return
+
+        session = self.server.session_store.create_session(profile, payload.get("session_id"))
+        self._write_json(HTTPStatus.CREATED, session.to_dict())
+
+    def _handle_preview(self, session_id: str, payload: dict) -> None:
+        session = self.server.session_store.get_session(session_id)
+        if session is None:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "Session not found"})
+            return
+
+        message = payload.get("message", "")
+        if not isinstance(message, str) or not message.strip():
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "message must be a non-empty string"})
+            return
+
+        scan_result = scan_text(message, session.profile)
+        self._write_json(
+            HTTPStatus.OK,
+            {
+                "session_id": session_id,
+                "profile": session.profile,
+                "preview_text": build_preview(scan_result),
+                "original_text": scan_result.original_text,
+                "redacted_text": scan_result.redacted_text,
+                "token_map": scan_result.token_map,
+                "suggested_action": scan_result.suggested_action,
+                "risk_level": RISK_LEVELS[scan_result.suggested_action],
+            },
+        )
+
+    def _handle_message(self, session_id: str, payload: dict) -> None:
+        session = self.server.session_store.get_session(session_id)
+        if session is None:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "Session not found"})
+            return
+
+        message = payload.get("message", "")
+        if not isinstance(message, str) or not message.strip():
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "message must be a non-empty string"})
+            return
+
+        scan_result = scan_text(message, session.profile)
+        final_action = payload.get("final_action") or scan_result.suggested_action
+        if final_action not in RISK_LEVELS:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": f"Invalid final_action: {final_action}"})
+            return
+        override_reason = payload.get("override_reason")
+
+        safe_text = apply_final_action(scan_result, final_action)
+        turn_id = session.next_turn_id()
+        files = build_turn_file_paths(session, turn_id)
+        files["user_original"].write_text(scan_result.original_text, encoding="utf-8")
+
+        if scan_result.token_map:
+            files["token_map"].write_text(
+                json.dumps(scan_result.token_map, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        if safe_text is None:
+            turn_record = TurnRecord(
+                turn_id=turn_id,
+                user_original=scan_result.original_text,
+                user_redacted=scan_result.redacted_text,
+                suggested_action=scan_result.suggested_action,
+                final_action=final_action,
+                override_reason=override_reason,
+                user_sent_text="",
+                artifacts={
+                    "user_original": str(files["user_original"]),
+                    **({"token_map": str(files["token_map"])} if scan_result.token_map else {}),
+                },
+            )
+            append_turn(session, turn_record)
+            self._write_json(
+                HTTPStatus.OK,
+                {
+                    "session_id": session_id,
+                    "turn_id": turn_id,
+                    "final_action": final_action,
+                    "blocked": True,
+                    "preview_text": build_preview(scan_result),
+                },
+            )
+            return
+
+        files["user_safe"].write_text(safe_text, encoding="utf-8")
+
+        try:
+            model_response = self.server.model_client.generate_reply(
+                session.history_for_prompt(),
+                safe_text,
+                session.profile,
+            )
+        except ModelClientError as exc:
+            self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
+            return
+
+        files["model_raw"].write_text(
+            json.dumps(model_response.raw_response, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        files["assistant_raw"].write_text(model_response.reply_text, encoding="utf-8")
+        restored_reply = restore_response(model_response.reply_text, scan_result.token_map)
+        files["assistant_restored"].write_text(restored_reply, encoding="utf-8")
+
+        turn_record = TurnRecord(
+            turn_id=turn_id,
+            user_original=scan_result.original_text,
+            user_redacted=scan_result.redacted_text,
+            suggested_action=scan_result.suggested_action,
+            final_action=final_action,
+            override_reason=override_reason,
+            user_sent_text=safe_text,
+            codex_raw_reply=model_response.reply_text,
+            codex_restored_reply=restored_reply,
+            token_map_path=str(files["token_map"]) if scan_result.token_map else None,
+            artifacts={
+                "user_original": str(files["user_original"]),
+                "user_safe": str(files["user_safe"]),
+                "model_raw": str(files["model_raw"]),
+                "assistant_raw": str(files["assistant_raw"]),
+                "assistant_restored": str(files["assistant_restored"]),
+                **({"token_map": str(files["token_map"])} if scan_result.token_map else {}),
+            },
+        )
+        append_turn(session, turn_record)
+
+        self._write_json(
+            HTTPStatus.OK,
+            {
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "profile": session.profile,
+                "suggested_action": scan_result.suggested_action,
+                "final_action": final_action,
+                "override_reason": override_reason,
+                "original_text": scan_result.original_text,
+                "redacted_text": scan_result.redacted_text,
+                "sent_text": safe_text,
+                "assistant_reply": restored_reply,
+                "assistant_raw_reply": model_response.reply_text,
+                "blocked": False,
+                "artifacts": turn_record.artifacts,
+            },
+        )
+
+    def _read_json_body(self) -> dict | None:
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid Content-Length"})
+            return None
+
+        raw_body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except json.JSONDecodeError:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Request body must be valid JSON"})
+            return None
+        if not isinstance(payload, dict):
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Request body must be a JSON object"})
+            return None
+        return payload
+
+    def _write_json(self, status: HTTPStatus, payload: dict) -> None:
+        body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class GuardHTTPServer(ThreadingHTTPServer):
+    def __init__(self, server_address, RequestHandlerClass, session_store: SessionStore, model_client: ModelClient):
+        super().__init__(server_address, RequestHandlerClass)
+        self.session_store = session_store
+        self.model_client = model_client
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run Agent Privacy Guard HTTP API server.")
+    parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind.")
+    parser.add_argument("--port", type=int, default=8000, help="Port to listen on.")
+    parser.add_argument("--output-dir", default="outputs/api-sessions", help="Directory used to store session artifacts.")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    session_store = SessionStore(Path(args.output_dir))
+    model_client = ModelClient.from_env()
+    server = GuardHTTPServer((args.host, args.port), GuardHTTPRequestHandler, session_store, model_client)
+    print(f"Agent Privacy Guard API listening on http://{args.host}:{args.port}")
+    print(f"Model provider: {model_client.provider} ({model_client.model})")
+    print(f"Session output dir: {Path(args.output_dir).resolve()}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

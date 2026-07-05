@@ -1,0 +1,27 @@
+{
+  "session_id": "session-20260705-162603",
+  "profile": "coding",
+  "created_at": "2026-07-05T16:26:03",
+  "session_dir": "outputs\\sessions\\session-20260705-162603",
+  "turns": [
+    {
+      "turn_id": 1,
+      "user_original": "my telephone is 13751073710，and i want to ask what is 1+1",
+      "user_redacted": "my telephone is [PHONE_NUMBER_d15fe7]，and i want to ask what is 1+1",
+      "suggested_action": "mask",
+      "final_action": "mask",
+      "override_reason": null,
+      "user_sent_text": "my telephone is [PHONE_NUMBER_d15fe7]，and i want to ask what is 1+1",
+      "codex_raw_reply": "",
+      "codex_restored_reply": "",
+      "token_map_path": "outputs\\sessions\\session-20260705-162603\\turn-001-token-map.json",
+      "artifacts": {
+        "user_original": "outputs\\sessions\\session-20260705-162603\\turn-001-user-original.txt",
+        "user_safe": "outputs\\sessions\\session-20260705-162603\\turn-001-user-safe.txt",
+        "codex_raw": "outputs\\sessions\\session-20260705-162603\\turn-001-codex-raw.txt",
+        "codex_restored": "outputs\\sessions\\session-20260705-162603\\turn-001-codex-restored.txt",
+        "token_map": "outputs\\sessions\\session-20260705-162603\\turn-001-token-map.json"
+      }
+    }
+  ]
+}

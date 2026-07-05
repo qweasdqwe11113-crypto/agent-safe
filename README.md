@@ -1,21 +1,67 @@
-# Agent Privacy Guard 原型
+# Agent Privacy Guard
 
-这是一个面向 Agent 工作流的本地隐私过滤原型。当前主线方案是 `guard.py` 这个 CLI wrapper：先扫描输入内容里的敏感信息，给出 `allow / mask / block` 建议，展示发送前预览，再由用户接受建议或 override。
+这是一个面向 Agent 会话的本地隐私过滤原型。当前主线已经从早期的单轮 CLI wrapper，升级为：
 
-项目里同时保留了一版早期 Codex 插件实验代码，目录是 `codex-privacy-filter/`；但当前推荐演示和继续开发的主线，是 CLI wrapper。
+- 本地会话型 API 后端
+- 发送前预览
+- `allow / mask / block`
+- token 映射与恢复
+- 会话审计与产物落盘
+- 真实模型服务接入
+
+当前项目已经支持：
+
+- `mock` 模型模式，用于本地联调
+- `rightcode` 模式，用于真实远程模型回复
+- OpenAI-compatible 适配层
+
+## 当前定位
+
+本项目当前更准确的定位不是“Codex 原生插件”，而是：
+
+**一个可复用的本地 Agent Privacy Proxy / Wrapper**
+
+它的作用是在内容离开本机、发送给远程模型前，先完成：
+
+1. 敏感内容扫描
+2. 发送前预览
+3. 脱敏或阻断
+4. 用户 override
+5. 会话审计
+
+这种做法符合课程项目里允许的：
+
+- plugin
+- proxy
+- wrapper
+- sidecar
+- OpenAI-compatible 代理方式
+
+## 当前主线架构
+
+```text
+Web / Client
+  -> Agent Privacy Guard API Server
+  -> guard_core (scan / preview / mask / block / restore)
+  -> session_state (session / turn / audit / artifacts)
+  -> model_client (mock / rightcode / openai-compatible)
+  -> remote model service
+```
 
 ## 当前已实现
 
-- 文件输入和标准输入
 - 敏感信息检测与脱敏
-- 风险分级和建议动作
-- 发送前预览
-- `--review` 交互确认
-- `--override` / `--override-reason`
-- `--out` 输出最终发给 Agent 的文本
-- `--codex` 自动调用 `codex exec`
-- `--codex-output` 保存 Codex 原始回复
-- 自动生成原文、token 映射、恢复后的回复
+- PII / secret / network 基础规则
+- `allow / mask / block`
+- 发送前 preview
+- token map 保存与恢复
+- 单轮 CLI 原型
+- 会话型 HTTP API 后端
+- 会话历史持久化
+- 会话产物输出到 `outputs/`
+- `mock` 模型联调
+- `rightcode` 真实模型接入
+- 基础单元测试
 
 ## 项目结构
 
@@ -23,18 +69,41 @@
 summer_projection/
   README.md
   guard.py
+  guard_core.py
+  session_guard.py
+  session_state.py
+  model_client.py
+  server.py
+  codex_client.py
   outputs/
   examples/
   tests/
   codex-privacy-filter/
-    core/
-    scripts/
-    skills/
 ```
+
+## 核心文件说明
+
+- [guard_core.py](C:/Users/jiahjq/Desktop/summer_projection/guard_core.py)
+  负责单条消息的扫描、建议动作、预览、脱敏、恢复
+
+- [session_state.py](C:/Users/jiahjq/Desktop/summer_projection/session_state.py)
+  负责会话、轮次、审计记录、会话文件持久化
+
+- [model_client.py](C:/Users/jiahjq/Desktop/summer_projection/model_client.py)
+  负责模型调用，目前支持 `mock`、`rightcode`、`openai_compatible`
+
+- [server.py](C:/Users/jiahjq/Desktop/summer_projection/server.py)
+  当前主线 HTTP API 后端，后续 Web 前端直接接这里
+
+- [guard.py](C:/Users/jiahjq/Desktop/summer_projection/guard.py)
+  早期单轮 CLI wrapper 原型，仍然保留用于演示单条消息流程
+
+- [session_guard.py](C:/Users/jiahjq/Desktop/summer_projection/session_guard.py)
+  早期终端会话原型，当前不再是最终主线
 
 ## 快速开始
 
-先进入项目目录：
+进入项目目录：
 
 ```powershell
 cd C:\Users\jiahjq\Desktop\summer_projection
@@ -46,159 +115,203 @@ cd C:\Users\jiahjq\Desktop\summer_projection
 python --version
 ```
 
-## 基本用法
+## 启动 API 后端
 
-处理文件：
+### 1. 本地 mock 模式
+
+这个模式不请求真实模型，适合本地联调：
+
+```powershell
+python server.py
+```
+
+启动后会看到：
+
+```text
+Agent Privacy Guard API listening on http://127.0.0.1:8000
+Model provider: mock (mock-gpt)
+```
+
+### 2. rightcode 真实模型模式
+
+当前代码会自动读取：
+
+- `C:\Users\jiahjq\.codex\config.toml` 里的 `rightcode base_url`
+- 默认模型名，例如 `gpt-5.4`
+
+你只需要在启动前设置 key：
+
+```powershell
+$env:APG_MODEL_PROVIDER="rightcode"
+$env:OPENAI_API_KEY="你的 rightcode key"
+python server.py
+```
+
+如果启动成功，会看到：
+
+```text
+Model provider: rightcode (gpt-5.4)
+```
+
+说明当前后端已经在请求真实模型，而不是 mock。
+
+## API 用法
+
+### 1. 创建会话
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8000/sessions" `
+  -ContentType "application/json" `
+  -Body '{"profile":"coding","session_id":"demo-session"}'
+```
+
+### 2. 查看发送前预览
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8000/sessions/demo-session/preview" `
+  -ContentType "application/json" `
+  -Body '{"message":"email=test@example.com"}'
+```
+
+这个接口会返回：
+
+- 原文
+- 脱敏后内容
+- token map
+- 建议动作
+- 风险等级
+
+### 3. 提交一轮消息
+
+例如按 `mask` 发送：
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8000/sessions/demo-session/messages" `
+  -ContentType "application/json" `
+  -Body '{"message":"email=test@example.com","final_action":"mask","override_reason":"demo"}'
+```
+
+例如直接 `allow`：
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8000/sessions/demo-session/messages" `
+  -ContentType "application/json" `
+  -Body '{"message":"hello","final_action":"allow"}'
+```
+
+如果当前是 `rightcode` 模式，这一步会真实请求模型。
+
+### 4. 查看会话
+
+```powershell
+Invoke-RestMethod -Method Get `
+  -Uri "http://127.0.0.1:8000/sessions/demo-session"
+```
+
+### 5. 查看所有轮次
+
+```powershell
+Invoke-RestMethod -Method Get `
+  -Uri "http://127.0.0.1:8000/sessions/demo-session/turns"
+```
+
+## 输出产物
+
+当前 API 会话产物写到：
+
+```text
+outputs/api-sessions/<session-id>/
+```
+
+每一轮通常会生成：
+
+- `turn-001-user-original.txt`
+- `turn-001-user-safe.txt`
+- `turn-001-token-map.json`
+- `turn-001-model-raw.json`
+- `turn-001-assistant-raw.txt`
+- `turn-001-assistant-restored.txt`
+
+同时会写：
+
+- `session.json`
+- `session-log.jsonl`
+
+## 早期 CLI 原型
+
+虽然当前主线已经是 API 后端，但项目里仍保留两个早期原型：
+
+### 1. 单轮 CLI wrapper
 
 ```powershell
 python guard.py examples\plain-input.txt --profile coding
 ```
 
-处理标准输入：
+### 2. 终端会话原型
 
 ```powershell
-@"
-Authorization: Bearer abcdefghijklmnopqrstuvwxyz
-email: test@example.com
-"@ | python guard.py --stdin --profile coding
+python session_guard.py --profile coding
 ```
 
-## review / override
+它们主要用于：
 
-交互 review：
+- 保留开发演进过程
+- 演示单条消息 preview / override
+- 对比“CLI 原型”和“API 会话后端”两条路线
+
+## 测试
+
+运行测试：
 
 ```powershell
-python guard.py examples\plain-input.txt --profile coding --review
+python -m unittest tests.test_model_client tests.test_server tests.test_session_state tests.test_guard tests.test_guard_override tests.test_guard_codex tests.test_redact
 ```
 
-交互时：
+## 当前已验证的能力
 
-- 直接回车：接受系统建议动作
-- 输入 `allow`：允许原文继续使用
-- 输入 `mask`：使用脱敏后的内容
-- 输入 `block`：阻断
-- 如果你改了系统建议，还需要输入 `override reason`
+当前已经在本机验证过：
 
-非交互 override：
+- API 会话创建成功
+- preview 接口成功
+- `mask` 后发送成功
+- token 恢复成功
+- `rightcode` 能返回真实模型回复
 
-```powershell
-python guard.py examples\plain-input.txt --profile coding --override mask --override-reason "demo approval"
-```
-
-## 输出文件
-
-推荐把 wrapper 的产物都放到 `outputs/` 目录：
-
-```powershell
-python guard.py examples\plain-input.txt --profile coding --review --out outputs\safe.txt
-```
-
-运行后，`outputs/` 里会得到这些文件：
-
-- `original.txt`
-  输入原文
-- `safe.txt`
-  真正准备继续交给 Agent 的文本
-  如果最终动作是 `allow`，这里是原文
-  如果最终动作是 `mask`，这里是脱敏后的文本
-  如果最终动作是 `block`，这个文件不会写出
-- `token-map.json`
-  token 到原始敏感值的映射
-
-## 自动调用 Codex
-
-如果想在 wrapper 处理完之后，自动把结果交给 Codex：
-
-```powershell
-python guard.py examples\plain-input.txt --profile coding --review --out outputs\safe.txt --codex --codex-output outputs\codex-result.txt
-```
-
-完整链路如下：
+例如下面这个结果就说明已经是真实模型回复：
 
 ```text
-输入原文
-  -> guard.py 检测 / 预览 / review
-  -> outputs/original.txt
-  -> outputs/safe.txt
-  -> outputs/token-map.json
-  -> codex exec
-  -> outputs/codex-result.txt
-  -> outputs/codex-result-restored.txt
+assistant_reply : Hello! How can I help?
+assistant_raw_reply : Hello! How can I help?
 ```
 
-其中：
+如果是 mock 模式，回复会像：
 
-- `codex-result.txt`
-  Codex 的原始回复
-- `codex-result-restored.txt`
-  把 Codex 回复里的占位符 token 按 `token-map.json` 恢复后的版本
-
-这样你就能同时保留：
-
-- 原文
-- 真正发给 Codex 的内容
-- Codex 原始回答
-- 恢复后的可读回答
-
-## allow / mask / block 的逻辑
-
-当前设计是：
-
-1. 系统先根据规则自动检测
-2. 系统给出建议动作
-3. 用户看到原文、命中项、脱敏后内容
-4. 用户接受建议，或者 override
-
-也就是说，标准设计不是“纯手选”，而是“代码先判，用户可 override”。
-
-## profile
-
-当前内置三个 profile：
-
-- `coding`
-- `office`
-- `finance`
-
-当前第一版策略大致是：
-
-- 命中 `secret` 时优先建议 `block`
-- 命中 `pii` 或 `network` 时优先建议 `mask`
-- 未命中时建议 `allow`
-
-## 和 Codex 的接入方式
-
-当前接入不是系统级自动拦截，而是 wrapper 式接入：
-
-1. 先运行 `guard.py`
-2. 由 `guard.py` 输出安全版本文本
-3. 再由 `guard.py` 自动调用 `codex exec`
-
-所以这更像“本地前置保护层”，而不是直接嵌进 Codex 内核里的透明拦截器。
-
-如果后续要做得更自动，可以继续往这些方向扩展：
-
-- 真正的 CLI wrapper
-- MCP server
-- OpenAI-compatible proxy
-- sidecar / hook
-
-对这个暑期项目来说，先把 CLI wrapper 做扎实，最容易形成完整 demo 和报告。
-
-## 运行测试
-
-```powershell
-python -m unittest tests.test_redact tests.test_guard tests.test_guard_override tests.test_guard_codex
+```text
+[mock:coding] turn 1 received. Latest message: hello
 ```
 
-## 适合现在继续做的事
+## 当前限制
 
-如果你下一步想把这个项目做成“能交付、能演示、能写报告”的版本，建议按这个顺序推进：
+- 当前策略规则还比较基础，覆盖面还需要继续扩展
+- `rightcode` 的 `responses` 接口返回格式和本项目初版假设不完全一致
+- 当前已通过回退到 `chat/completions` 兼容调用解决这一问题
+- 当前前端界面还没有完成，主线先是 API 后端
+- 当前还不是 Codex 应用内原生 UI 插件，而是本地会话代理/包装器
 
-1. 先把 `coding / office / finance` 三套样例补完整
-2. 再补评测语料和误报/漏报统计
-3. 再补审计日志
-4. 最后再考虑更自动的接入方式
+## 下一步
+
+建议接下来按这个顺序推进：
+
+1. 做最小 Web 前端
+2. 补三类场景模板：coding / office / finance
+3. 扩充规则配置化
+4. 补评测集与效果报告
+5. 补更完整的审计展示
 
 ## 说明
 
-这个项目当前目标是做出一个能展示“Agent 发送上下文前可以被本地扫描、预览、脱敏、阻断”的原型，而不是一开始就做成完整企业级 DLP 系统。
+本项目当前目标是做出一个能演示“Agent 会话在发送前可以被本地扫描、预览、脱敏、阻断和审计”的可运行原型，而不是一开始就做成完整企业级 DLP 系统。

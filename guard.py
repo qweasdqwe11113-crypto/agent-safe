@@ -1,58 +1,21 @@
 #!/usr/bin/env python3
 import argparse
-import os
-import shutil
-import subprocess
 import sys
-from collections import Counter
 from pathlib import Path
 
+from codex_client import build_file_analysis_prompt, extract_assistant_reply, run_codex_turn
+from guard_core import (
+    PROFILE_POLICIES,
+    RISK_LEVELS,
+    apply_final_action,
+    build_preview,
+    build_report,
+    restore_response_file,
+    scan_text,
+    write_turn_artifacts,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parent
-PLUGIN_ROOT = PROJECT_ROOT / "codex-privacy-filter"
-if str(PLUGIN_ROOT) not in sys.path:
-    sys.path.insert(0, str(PLUGIN_ROOT))
-
-from core.redactor import redact_text  # noqa: E402
-from core.vault import restore_string, save_token_map  # noqa: E402
-
-
-PROFILE_POLICIES = {
-    "coding": {
-        "block_categories": {"secret"},
-        "mask_categories": {"pii", "network"},
-    },
-    "office": {
-        "block_categories": {"secret"},
-        "mask_categories": {"pii", "network"},
-    },
-    "finance": {
-        "block_categories": {"secret", "finance"},
-        "mask_categories": {"pii", "network"},
-    },
-}
-
-LABEL_CATEGORIES = {
-    "SENSITIVE_SECRET": "secret",
-    "AUTH_TOKEN": "secret",
-    "OPENAI_KEY": "secret",
-    "ANTHROPIC_KEY": "secret",
-    "GITHUB_TOKEN": "secret",
-    "NPM_TOKEN": "secret",
-    "STRIPE_SECRET": "secret",
-    "PRIVATE_KEY": "secret",
-    "GENERIC_TOKEN": "secret",
-    "USER_EMAIL": "pii",
-    "PHONE_NUMBER": "pii",
-    "PAYMENT_CARD": "finance",
-    "IPV4_ADDRESS": "network",
-    "IPV6_ADDRESS": "network",
-}
-
-RISK_LEVELS = {
-    "allow": "LOW",
-    "mask": "MEDIUM",
-    "block": "HIGH",
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,11 +23,7 @@ def parse_args() -> argparse.Namespace:
         description="Preview allow/mask/block decisions before sending content to an agent."
     )
     parser.add_argument("input", nargs="?", help="Input file path.")
-    parser.add_argument(
-        "--stdin",
-        action="store_true",
-        help="Read input from stdin instead of a file.",
-    )
+    parser.add_argument("--stdin", action="store_true", help="Read input from stdin instead of a file.")
     parser.add_argument(
         "--profile",
         choices=sorted(PROFILE_POLICIES),
@@ -76,32 +35,20 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Show a review step and let the user choose the final action interactively.",
     )
-    parser.add_argument(
-        "--out",
-        help="Optional output file path used to save the final content selected by the wrapper.",
-    )
+    parser.add_argument("--out", help="Optional output file path used to save the final content selected by the wrapper.")
     parser.add_argument(
         "--codex",
         action="store_true",
         help="After wrapper review, automatically call `codex exec` with the prepared content file.",
     )
-    parser.add_argument(
-        "--codex-profile",
-        help="Optional Codex profile name passed to `codex exec --profile`.",
-    )
-    parser.add_argument(
-        "--codex-output",
-        help="Optional file path used to save the last message returned by `codex exec`.",
-    )
+    parser.add_argument("--codex-profile", help="Optional Codex profile name passed to `codex exec --profile`.")
+    parser.add_argument("--codex-output", help="Optional file path used to save the last message returned by `codex exec`.")
     parser.add_argument(
         "--override",
         choices=("allow", "mask", "block"),
         help="Optional final action chosen by the user to override the suggested action.",
     )
-    parser.add_argument(
-        "--override-reason",
-        help="Optional reason recorded when overriding the suggested action.",
-    )
+    parser.add_argument("--override-reason", help="Optional reason recorded when overriding the suggested action.")
     args = parser.parse_args()
 
     if args.stdin == bool(args.input):
@@ -124,38 +71,6 @@ def read_input(args: argparse.Namespace) -> str:
     if args.stdin:
         return sys.stdin.read()
     return Path(args.input).read_text(encoding="utf-8")
-
-
-def extract_label(token: str) -> str:
-    if not (token.startswith("[") and token.endswith("]")):
-        return "UNKNOWN"
-    body = token[1:-1]
-    if "_" not in body:
-        return body
-    return body.rsplit("_", 1)[0]
-
-
-def label_display_name(label: str) -> str:
-    return label.replace("_", " ").title()
-
-
-def summarize_findings(token_map: dict[str, str]) -> list[tuple[str, int]]:
-    label_counts = Counter(extract_label(token) for token in token_map)
-    return sorted(label_counts.items(), key=lambda item: (-item[1], item[0]))
-
-
-def decide_action(labels: set[str], profile: str) -> str:
-    if not labels:
-        return "allow"
-
-    policy = PROFILE_POLICIES[profile]
-    categories = {LABEL_CATEGORIES.get(label, "unknown") for label in labels}
-
-    if categories & policy["block_categories"]:
-        return "block"
-    if categories & policy["mask_categories"]:
-        return "mask"
-    return "allow"
 
 
 def open_review_input():
@@ -205,91 +120,13 @@ def prompt_review_decision(suggested_action: str) -> tuple[str, str | None]:
         review_input.close()
 
 
-def format_preview(
-    profile: str,
-    suggested_action: str,
-    original_text: str,
-    token_map: dict[str, str],
-    redacted_text: str,
-) -> str:
-    sections = [
-        f"Profile: {profile}",
-        "",
-        "Detection Results:",
-    ]
-
-    findings = summarize_findings(token_map)
-    if findings:
-        for label, count in findings:
-            sections.append(f"- {label_display_name(label)}: {count}")
-    else:
-        sections.append("- No sensitive content detected")
-
-    sections.extend(
-        [
-            "",
-            f"Risk Level: {RISK_LEVELS[suggested_action]}",
-            f"Suggested Action: {suggested_action.upper()}",
-            "",
-            "Original Content:",
-            original_text,
-            "",
-            "Redacted Content:",
-            redacted_text,
-        ]
-    )
-    return "\n".join(sections)
-
-
-def format_report(
-    profile: str,
-    suggested_action: str,
-    final_action: str,
-    override_reason: str | None,
-    original_text: str,
-    token_map: dict[str, str],
-    redacted_text: str,
-) -> str:
-    sections = [format_preview(profile, suggested_action, original_text, token_map, redacted_text)]
-    sections.extend(["", f"Final Action: {final_action.upper()}"])
-
-    if final_action != suggested_action:
-        sections.append(f"Override: YES ({(override_reason or 'No reason provided').strip()})")
-    else:
-        sections.append("Override: NO")
-    return "\n".join(sections)
-
-
 def build_codex_prompt(output_path: Path, final_action: str) -> str:
-    mode_text = "approved original" if final_action == "allow" else "sanitized"
-    absolute_output_path = output_path.resolve()
-    file_name = absolute_output_path.name
-    return (
-        f"Please analyze the {mode_text} content in this file: "
-        f"[{file_name}](<{absolute_output_path}>). "
-        f"Absolute path: {absolute_output_path}. "
-        "Treat this file as the approved context prepared by Agent Privacy Guard."
-    )
+    return build_file_analysis_prompt(output_path, final_action)
 
 
-def build_artifact_path(base_path: Path, file_name: str) -> Path:
-    return base_path.parent / file_name
-
-
-def write_guard_artifacts(
-    output_path: Path,
-    original_text: str,
-    token_map: dict[str, str],
-) -> tuple[Path, Path | None]:
-    original_path = build_artifact_path(output_path, "original.txt")
-    original_path.write_text(original_text, encoding="utf-8")
-
-    token_map_path = None
-    if token_map:
-        token_map_path = build_artifact_path(output_path, "token-map.json")
-        save_token_map(token_map, str(token_map_path))
-
-    return original_path, token_map_path
+def write_guard_artifacts(output_path: Path, original_text: str, token_map: dict[str, str]) -> tuple[Path, Path | None]:
+    artifacts = write_turn_artifacts(output_path, original_text, None, token_map)
+    return artifacts["original"], artifacts.get("token_map")
 
 
 def run_codex_exec(
@@ -297,92 +134,60 @@ def run_codex_exec(
     final_action: str,
     codex_output: str | None,
     codex_profile: str | None,
-) -> subprocess.CompletedProcess:
-    codex_executable = shutil.which("codex.cmd") or shutil.which("codex.exe") or shutil.which("codex")
-    if not codex_executable:
-        raise FileNotFoundError(
-            "Could not find Codex CLI executable. Make sure `codex` is installed and available in PATH."
-        )
-
-    command = [
-        codex_executable,
-        "exec",
-    ]
-    if codex_profile:
-        command.extend(["--profile", codex_profile])
-    command.extend(
-        [
-            build_codex_prompt(output_path, final_action),
-            "-C",
-            str(PROJECT_ROOT),
-        ]
-    )
+):
+    prompt = build_codex_prompt(output_path, final_action)
+    process = run_codex_turn(prompt, Path(codex_output) if codex_output else None, codex_profile, PROJECT_ROOT)
     if codex_output:
-        command.extend(["-o", codex_output])
-    return subprocess.run(command, text=True, check=True, env=os.environ.copy())
+        codex_output_path = Path(codex_output)
+        if (not codex_output_path.exists()) or (not codex_output_path.read_text(encoding="utf-8").strip()):
+            codex_output_path.parent.mkdir(parents=True, exist_ok=True)
+            codex_output_path.write_text(extract_assistant_reply(process.stdout), encoding="utf-8")
+    return process
 
 
 def restore_codex_output(codex_output_path: Path, token_map: dict[str, str]) -> Path:
-    restored_path = build_artifact_path(codex_output_path, "codex-result-restored.txt")
-    raw_text = codex_output_path.read_text(encoding="utf-8")
-    restored_text = restore_string(raw_text, token_map) if token_map else raw_text
-    restored_path.write_text(restored_text, encoding="utf-8")
-    return restored_path
+    return restore_response_file(codex_output_path, token_map)
 
 
 def main() -> int:
     args = parse_args()
-    text = read_input(args)
-    redacted_text, token_map = redact_text(text)
-    labels = {extract_label(token) for token in token_map}
-    suggested_action = decide_action(labels, args.profile)
+    scan_result = scan_text(read_input(args), args.profile)
+
     if args.review:
-        sys.stdout.write(format_preview(args.profile, suggested_action, text, token_map, redacted_text))
+        sys.stdout.write(build_preview(scan_result))
         sys.stdout.write("\n")
-        final_action, override_reason = prompt_review_decision(suggested_action)
+        final_action, override_reason = prompt_review_decision(scan_result.suggested_action)
         sys.stdout.write(f"\nFinal Action: {final_action.upper()}\n")
-        if final_action != suggested_action:
+        if final_action != scan_result.suggested_action:
             sys.stdout.write(f"Override: YES ({(override_reason or 'No reason provided').strip()})\n")
         else:
             sys.stdout.write("Override: NO\n")
     else:
-        final_action = args.override or suggested_action
+        final_action = args.override or scan_result.suggested_action
         override_reason = args.override_reason
-        sys.stdout.write(
-            format_report(
-                args.profile,
-                suggested_action,
-                final_action,
-                override_reason,
-                text,
-                token_map,
-                redacted_text,
-            )
-        )
+        sys.stdout.write(build_report(scan_result, final_action, override_reason))
 
     output_path = Path(args.out) if args.out else None
     wrote_output = False
-    token_map_path = None
-    original_path = None
     if output_path:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        original_path, token_map_path = write_guard_artifacts(output_path, text, token_map)
-        if final_action == "allow":
-            output_path.write_text(text, encoding="utf-8")
-            sys.stdout.write(f"\nOutput File: {output_path}\n")
-            wrote_output = True
-        elif final_action == "mask":
-            output_path.write_text(redacted_text, encoding="utf-8")
-            sys.stdout.write(f"\nOutput File: {output_path}\n")
-            wrote_output = True
+        safe_text = apply_final_action(scan_result, final_action)
+        artifacts = write_turn_artifacts(
+            output_path=output_path,
+            original_text=scan_result.original_text,
+            safe_text=safe_text,
+            token_map=scan_result.token_map,
+        )
+
+        if safe_text is None:
+            sys.stdout.write("\nOutput File: not written because final action is BLOCK\n")
         else:
-            if output_path.exists():
-                output_path.unlink()
-            sys.stdout.write(f"\nOutput File: not written because final action is BLOCK\n")
-        if original_path:
-            sys.stdout.write(f"Original File: {original_path}\n")
-        if token_map_path:
-            sys.stdout.write(f"Token Map File: {token_map_path}\n")
+            sys.stdout.write(f"\nOutput File: {output_path}\n")
+            wrote_output = True
+
+        if "original" in artifacts:
+            sys.stdout.write(f"Original File: {artifacts['original']}\n")
+        if "token_map" in artifacts:
+            sys.stdout.write(f"Token Map File: {artifacts['token_map']}\n")
 
     if args.codex:
         if final_action == "block":
@@ -396,7 +201,7 @@ def main() -> int:
                 sys.stdout.write(f"Codex Output File: {args.codex_output}\n")
                 codex_output_path = Path(args.codex_output)
                 if codex_output_path.exists():
-                    restored_path = restore_codex_output(codex_output_path, token_map)
+                    restored_path = restore_codex_output(codex_output_path, scan_result.token_map)
                     sys.stdout.write(f"Codex Restored Output File: {restored_path}\n")
     return 0
 

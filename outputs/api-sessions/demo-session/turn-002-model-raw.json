@@ -1,0 +1,27 @@
+{
+  "id": "resp_0c4b98bb6e0bca46016a4a1ccd7e748196aab5408dfb82bff0",
+  "object": "chat.completion",
+  "created": 1783241934,
+  "model": "gpt-5.4",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Hi! How can I help?"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 340,
+    "completion_tokens": 11,
+    "total_tokens": 351,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}
