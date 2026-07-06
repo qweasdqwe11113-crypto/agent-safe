@@ -1,45 +1,27 @@
 {
   "session_id": "demo-session",
   "profile": "coding",
-  "created_at": "2026-07-05T16:52:21",
+  "created_at": "2026-07-06T16:57:15",
   "session_dir": "outputs\\api-sessions\\demo-session",
   "turns": [
     {
       "turn_id": 1,
-      "user_original": "hello",
-      "user_redacted": "hello",
-      "suggested_action": "allow",
-      "final_action": "allow",
+      "user_original": "my email is test@example.com, help me write Python",
+      "user_redacted": "my email is [USER_EMAIL_973dfe], help me write Python",
+      "suggested_action": "mask",
+      "final_action": "mask",
       "override_reason": null,
-      "user_sent_text": "hello",
-      "codex_raw_reply": "Hello! How can I help?",
-      "codex_restored_reply": "Hello! How can I help?",
-      "token_map_path": null,
+      "user_sent_text": "my email is [USER_EMAIL_973dfe], help me write Python",
+      "codex_raw_reply": "Sure — what Python do you want to write?\n\nFor example, I can help with:\n- a script\n- a web app\n- data analysis\n- automation\n- fixing a bug\n- explaining Python basics\n\nIf you want, send me:\n1. what the program should do\n2. any code you already have\n3. any error message you're seeing",
+      "codex_restored_reply": "Sure — what Python do you want to write?\n\nFor example, I can help with:\n- a script\n- a web app\n- data analysis\n- automation\n- fixing a bug\n- explaining Python basics\n\nIf you want, send me:\n1. what the program should do\n2. any code you already have\n3. any error message you're seeing",
+      "token_map_path": "outputs\\api-sessions\\demo-session\\turn-001-token-map.json",
       "artifacts": {
         "user_original": "outputs\\api-sessions\\demo-session\\turn-001-user-original.txt",
         "user_safe": "outputs\\api-sessions\\demo-session\\turn-001-user-safe.txt",
         "model_raw": "outputs\\api-sessions\\demo-session\\turn-001-model-raw.json",
         "assistant_raw": "outputs\\api-sessions\\demo-session\\turn-001-assistant-raw.txt",
-        "assistant_restored": "outputs\\api-sessions\\demo-session\\turn-001-assistant-restored.txt"
-      }
-    },
-    {
-      "turn_id": 2,
-      "user_original": "hi",
-      "user_redacted": "hi",
-      "suggested_action": "allow",
-      "final_action": "allow",
-      "override_reason": null,
-      "user_sent_text": "hi",
-      "codex_raw_reply": "Hi! How can I help?",
-      "codex_restored_reply": "Hi! How can I help?",
-      "token_map_path": null,
-      "artifacts": {
-        "user_original": "outputs\\api-sessions\\demo-session\\turn-002-user-original.txt",
-        "user_safe": "outputs\\api-sessions\\demo-session\\turn-002-user-safe.txt",
-        "model_raw": "outputs\\api-sessions\\demo-session\\turn-002-model-raw.json",
-        "assistant_raw": "outputs\\api-sessions\\demo-session\\turn-002-assistant-raw.txt",
-        "assistant_restored": "outputs\\api-sessions\\demo-session\\turn-002-assistant-restored.txt"
+        "assistant_restored": "outputs\\api-sessions\\demo-session\\turn-001-assistant-restored.txt",
+        "token_map": "outputs\\api-sessions\\demo-session\\turn-001-token-map.json"
       }
     }
   ]

@@ -26,7 +26,7 @@
 1. 敏感内容扫描
 2. 发送前预览
 3. 脱敏或阻断
-4. 用户 override
+4. 用户确认或 override
 5. 会话审计
 
 这种做法符合课程项目里允许的：
@@ -84,22 +84,22 @@ summer_projection/
 ## 核心文件说明
 
 - [guard_core.py](C:/Users/jiahjq/Desktop/summer_projection/guard_core.py)
-  负责单条消息的扫描、建议动作、预览、脱敏、恢复
+  负责单条消息的扫描、建议动作、预览、脱敏、恢复。
 
 - [session_state.py](C:/Users/jiahjq/Desktop/summer_projection/session_state.py)
-  负责会话、轮次、审计记录、会话文件持久化
+  负责会话、轮次、审计记录、会话文件持久化。
 
 - [model_client.py](C:/Users/jiahjq/Desktop/summer_projection/model_client.py)
-  负责模型调用，目前支持 `mock`、`rightcode`、`openai_compatible`
+  负责模型调用，目前支持 `mock`、`rightcode`、`openai_compatible`。
 
 - [server.py](C:/Users/jiahjq/Desktop/summer_projection/server.py)
-  当前主线 HTTP API 后端，后续 Web 前端直接接这里
+  当前主线 HTTP API 后端，后续 Web 前端直接接这里。
 
 - [guard.py](C:/Users/jiahjq/Desktop/summer_projection/guard.py)
-  早期单轮 CLI wrapper 原型，仍然保留用于演示单条消息流程
+  早期单轮 CLI wrapper 原型，仍然保留用于演示单条消息流程。
 
 - [session_guard.py](C:/Users/jiahjq/Desktop/summer_projection/session_guard.py)
-  早期终端会话原型，当前不再是最终主线
+  早期终端会话原型，当前不再是最终主线。
 
 ## 快速开始
 
@@ -136,7 +136,7 @@ Model provider: mock (mock-gpt)
 
 当前代码会自动读取：
 
-- `C:\Users\jiahjq\.codex\config.toml` 里的 `rightcode base_url`
+- `C:\Users\jiahjq\.codex\config.toml` 里的 `rightcode` `base_url`
 - 默认模型名，例如 `gpt-5.4`
 
 你只需要在启动前设置 key：
@@ -153,9 +153,16 @@ python server.py
 Model provider: rightcode (gpt-5.4)
 ```
 
-说明当前后端已经在请求真实模型，而不是 mock。
+说明当前后端已经在请求真实模型，而不是 `mock`。
 
-## API 用法
+## API 使用流程
+
+当前推荐流程是：
+
+1. 创建会话
+2. 调用 `/preview` 看原文、脱敏文和三种动作的结果
+3. 用户决定是否 override
+4. 调用 `/confirm` 真正发送给模型
 
 ### 1. 创建会话
 
@@ -177,33 +184,58 @@ Invoke-RestMethod -Method Post `
 
 这个接口会返回：
 
+- `preview_id`
 - 原文
 - 脱敏后内容
 - token map
 - 建议动作
 - 风险等级
+- `allow / mask / block` 三种动作分别会发什么
 
-### 3. 提交一轮消息
+例如返回里会包含：
 
-例如按 `mask` 发送：
+- `suggested_action`
+- `suggested_sent_text`
+- `action_options.allow.sent_text`
+- `action_options.mask.sent_text`
+- `action_options.block.sent_text`
+
+### 3. 确认最终动作并真正发送
+
+拿到上一步的 `preview_id` 之后，再调用 `/confirm`。
+
+例如按建议 `mask`：
 
 ```powershell
 Invoke-RestMethod -Method Post `
-  -Uri "http://127.0.0.1:8000/sessions/demo-session/messages" `
+  -Uri "http://127.0.0.1:8000/sessions/demo-session/confirm" `
   -ContentType "application/json" `
-  -Body '{"message":"email=test@example.com","final_action":"mask","override_reason":"demo"}'
+  -Body '{"preview_id":"上一步返回的preview_id","final_action":"mask"}'
 ```
 
-例如直接 `allow`：
+例如 override 成 `allow`：
 
 ```powershell
 Invoke-RestMethod -Method Post `
-  -Uri "http://127.0.0.1:8000/sessions/demo-session/messages" `
+  -Uri "http://127.0.0.1:8000/sessions/demo-session/confirm" `
   -ContentType "application/json" `
-  -Body '{"message":"hello","final_action":"allow"}'
+  -Body '{"preview_id":"上一步返回的preview_id","final_action":"allow","override_reason":"demo allow override"}'
 ```
 
-如果当前是 `rightcode` 模式，这一步会真实请求模型。
+例如直接阻断：
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8000/sessions/demo-session/confirm" `
+  -ContentType "application/json" `
+  -Body '{"preview_id":"上一步返回的preview_id","final_action":"block","override_reason":"too sensitive"}'
+```
+
+只有这一步才会真正：
+
+- 写入 turn
+- 发送给模型
+- 返回模型回复
 
 ### 4. 查看会话
 
@@ -218,6 +250,15 @@ Invoke-RestMethod -Method Get `
 Invoke-RestMethod -Method Get `
   -Uri "http://127.0.0.1:8000/sessions/demo-session/turns"
 ```
+
+### 6. 说明
+
+旧的 `/messages` 直发流程已经不再推荐使用。当前主线是：
+
+- `/preview`
+- `/confirm`
+
+这样更符合“先看改成什么样，再决定是否 override”的产品逻辑。
 
 ## 输出产物
 
@@ -276,10 +317,12 @@ python -m unittest tests.test_model_client tests.test_server tests.test_session_
 当前已经在本机验证过：
 
 - API 会话创建成功
-- preview 接口成功
+- `/preview` 接口成功
+- `/confirm` 确认发送成功
 - `mask` 后发送成功
 - token 恢复成功
 - `rightcode` 能返回真实模型回复
+- 多轮上下文能被模型记住
 
 例如下面这个结果就说明已经是真实模型回复：
 
@@ -288,10 +331,19 @@ assistant_reply : Hello! How can I help?
 assistant_raw_reply : Hello! How can I help?
 ```
 
-如果是 mock 模式，回复会像：
+如果是 `mock` 模式，回复会像：
 
 ```text
 [mock:coding] turn 1 received. Latest message: hello
+```
+
+如果多轮上下文正常工作，模型可以回答类似：
+
+```text
+Sure:
+- You: "hello"
+- Me: "Hello! How can I help?"
+...
 ```
 
 ## 当前限制

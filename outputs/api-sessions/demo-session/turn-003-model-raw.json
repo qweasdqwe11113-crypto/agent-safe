@@ -1,0 +1,27 @@
+{
+  "id": "resp_06e6a7da6a9519a4016a4a1d2b79f881969f53c7a0ecca15bc",
+  "object": "chat.completion",
+  "created": 1783242028,
+  "model": "gpt-5.4",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Yep, I’m here. What do you need?"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 360,
+    "completion_tokens": 15,
+    "total_tokens": 375,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

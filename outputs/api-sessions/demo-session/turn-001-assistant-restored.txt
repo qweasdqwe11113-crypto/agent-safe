@@ -1,1 +1,14 @@
-Hello! How can I help?
+Sure — what Python do you want to write?
+
+For example, I can help with:
+- a script
+- a web app
+- data analysis
+- automation
+- fixing a bug
+- explaining Python basics
+
+If you want, send me:
+1. what the program should do
+2. any code you already have
+3. any error message you're seeing

@@ -3,6 +3,7 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 from model_client import ModelClient
@@ -32,8 +33,11 @@ class ServerTests(unittest.TestCase):
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
-        with urllib.request.urlopen(request, timeout=10) as response:
-            return response.status, json.loads(response.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
 
     def test_create_preview_and_message_flow(self) -> None:
         status, created = self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "demo-session"})
@@ -42,14 +46,19 @@ class ServerTests(unittest.TestCase):
 
         status, preview = self.request_json("POST", "/sessions/demo-session/preview", {"message": "email=test@example.com"})
         self.assertEqual(status, 200)
+        self.assertIn("preview_id", preview)
         self.assertEqual(preview["suggested_action"], "mask")
         self.assertIn("[USER_EMAIL_", preview["redacted_text"])
+        self.assertTrue(preview["needs_confirmation"])
+        self.assertEqual(preview["action_options"]["allow"]["sent_text"], "email=test@example.com")
+        self.assertIn("[USER_EMAIL_", preview["action_options"]["mask"]["sent_text"])
+        self.assertIsNone(preview["action_options"]["block"]["sent_text"])
 
         status, result = self.request_json(
             "POST",
-            "/sessions/demo-session/messages",
+            "/sessions/demo-session/confirm",
             {
-                "message": "email=test@example.com",
+                "preview_id": preview["preview_id"],
                 "final_action": "mask",
                 "override_reason": "demo",
             },
@@ -58,6 +67,7 @@ class ServerTests(unittest.TestCase):
         self.assertFalse(result["blocked"])
         self.assertIn("[USER_EMAIL_", result["sent_text"])
         self.assertIn("[mock:coding]", result["assistant_reply"])
+        self.assertFalse(result["override"])
 
         status, session_payload = self.request_json("GET", "/sessions/demo-session")
         self.assertEqual(status, 200)
@@ -65,14 +75,29 @@ class ServerTests(unittest.TestCase):
 
     def test_blocked_message_does_not_call_model(self) -> None:
         self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "blocked-session"})
+        _, preview = self.request_json(
+            "POST",
+            "/sessions/blocked-session/preview",
+            {"message": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz"},
+        )
         status, result = self.request_json(
             "POST",
-            "/sessions/blocked-session/messages",
-            {"message": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz"},
+            "/sessions/blocked-session/confirm",
+            {"preview_id": preview["preview_id"], "final_action": "block"},
         )
         self.assertEqual(status, 200)
         self.assertTrue(result["blocked"])
         self.assertEqual(result["final_action"], "block")
+
+    def test_messages_endpoint_tells_client_to_use_preview_confirm(self) -> None:
+        self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "flow-session"})
+        status, result = self.request_json(
+            "POST",
+            "/sessions/flow-session/messages",
+            {"message": "hello"},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("Use /preview first", result["error"])
 
 
 if __name__ == "__main__":

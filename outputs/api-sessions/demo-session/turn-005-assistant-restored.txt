@@ -1,0 +1,11 @@
+Sure:
+
+- You: "hello"
+- Me: "Hello! How can I help?"
+- You: "hi"
+- Me: "Hi! How can I help?"
+- You: "????????"
+- Me: "Yep, I’m here. What do you need?"
+- You: "what did i say just now?"
+- Me: "You just said: "what did i say just now?""
+- You: "give me all the chat history?"

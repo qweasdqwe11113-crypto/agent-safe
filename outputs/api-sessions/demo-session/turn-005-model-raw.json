@@ -1,0 +1,27 @@
+{
+  "id": "resp_07ddf2d91ffd6c9e016a4a1d8b40308197aa84a544185f09c6",
+  "object": "chat.completion",
+  "created": 1783242126,
+  "model": "gpt-5.4",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Sure:\n\n- You: \"hello\"\n- Me: \"Hello! How can I help?\"\n- You: \"hi\"\n- Me: \"Hi! How can I help?\"\n- You: \"????????\"\n- Me: \"Yep, I’m here. What do you need?\"\n- You: \"what did i say just now?\"\n- Me: \"You just said: \"what did i say just now?\"\"\n- You: \"give me all the chat history?\""
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 417,
+    "completion_tokens": 100,
+    "total_tokens": 517,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

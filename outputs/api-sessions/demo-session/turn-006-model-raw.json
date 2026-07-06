@@ -1,0 +1,27 @@
+{
+  "id": "resp_03fd108e4095638f016a4a1f41d0a88196969a172704323620",
+  "object": "chat.completion",
+  "created": 1783242563,
+  "model": "gpt-5.4",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "You said: \"email=test@example.com\""
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 560,
+    "completion_tokens": 13,
+    "total_tokens": 573,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

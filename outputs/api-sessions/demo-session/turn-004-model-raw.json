@@ -1,0 +1,27 @@
+{
+  "id": "resp_04dce1915163751b016a4a1d47ba1c81959a50ccda81216d93",
+  "object": "chat.completion",
+  "created": 1783242056,
+  "model": "gpt-5.4",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "You just said: \"what did i say just now?\""
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 405,
+    "completion_tokens": 16,
+    "total_tokens": 421,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}

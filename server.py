@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,6 +20,7 @@ class SessionStore:
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.sessions: dict[str, SessionState] = {}
+        self.pending_previews: dict[str, dict] = {}
 
     def create_session(self, profile: str, session_id: str | None = None) -> SessionState:
         session = SessionState.create(profile, self.base_dir, session_id)
@@ -36,6 +38,31 @@ class SessionStore:
             self.sessions[session_id] = session
             return session
         return None
+
+    def save_preview(self, session_id: str, payload: dict) -> str:
+        preview_id = uuid.uuid4().hex
+        self.pending_previews[preview_id] = {"session_id": session_id, **payload}
+        return preview_id
+
+    def pop_preview(self, preview_id: str) -> dict | None:
+        return self.pending_previews.pop(preview_id, None)
+
+
+def build_action_options(scan_result) -> dict:
+    return {
+        "allow": {
+            "sent_text": scan_result.original_text,
+            "description": "Send the original text to the model.",
+        },
+        "mask": {
+            "sent_text": scan_result.redacted_text,
+            "description": "Send the redacted text to the model.",
+        },
+        "block": {
+            "sent_text": None,
+            "description": "Do not send this turn to the model.",
+        },
+    }
 
 
 def build_turn_file_paths(session: SessionState, turn_id: int) -> dict[str, Path]:
@@ -105,6 +132,11 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             self._handle_message(session_id, payload)
             return
 
+        if path.startswith("/sessions/") and path.endswith("/confirm"):
+            session_id = path.split("/")[2]
+            self._handle_confirm(session_id, payload)
+            return
+
         self._write_json(HTTPStatus.NOT_FOUND, {"error": "Route not found"})
 
     def _handle_create_session(self, payload: dict) -> None:
@@ -128,61 +160,88 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         scan_result = scan_text(message, session.profile)
+        action_options = build_action_options(scan_result)
+        preview_payload = {
+            "message": message,
+            "profile": session.profile,
+            "original_text": scan_result.original_text,
+            "redacted_text": scan_result.redacted_text,
+            "token_map": scan_result.token_map,
+            "suggested_action": scan_result.suggested_action,
+            "risk_level": RISK_LEVELS[scan_result.suggested_action],
+            "suggested_sent_text": apply_final_action(scan_result, scan_result.suggested_action),
+            "action_options": action_options,
+            "preview_text": build_preview(scan_result),
+        }
+        preview_id = self.server.session_store.save_preview(session_id, preview_payload)
+
         self._write_json(
             HTTPStatus.OK,
             {
+                "preview_id": preview_id,
                 "session_id": session_id,
                 "profile": session.profile,
-                "preview_text": build_preview(scan_result),
-                "original_text": scan_result.original_text,
-                "redacted_text": scan_result.redacted_text,
-                "token_map": scan_result.token_map,
-                "suggested_action": scan_result.suggested_action,
-                "risk_level": RISK_LEVELS[scan_result.suggested_action],
+                **preview_payload,
+                "needs_confirmation": True,
             },
         )
 
     def _handle_message(self, session_id: str, payload: dict) -> None:
+        self._write_json(
+            HTTPStatus.BAD_REQUEST,
+            {
+                "error": "Use /preview first, then /confirm with preview_id and final_action.",
+            },
+        )
+
+    def _handle_confirm(self, session_id: str, payload: dict) -> None:
         session = self.server.session_store.get_session(session_id)
         if session is None:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "Session not found"})
             return
 
-        message = payload.get("message", "")
-        if not isinstance(message, str) or not message.strip():
-            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "message must be a non-empty string"})
+        preview_id = payload.get("preview_id", "")
+        if not isinstance(preview_id, str) or not preview_id.strip():
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "preview_id must be a non-empty string"})
+            return
+        preview_payload = self.server.session_store.pop_preview(preview_id)
+        if preview_payload is None:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "Preview not found or already confirmed"})
+            return
+        if preview_payload["session_id"] != session_id:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "preview_id does not belong to this session"})
             return
 
-        scan_result = scan_text(message, session.profile)
-        final_action = payload.get("final_action") or scan_result.suggested_action
+        final_action = payload.get("final_action") or preview_payload["suggested_action"]
         if final_action not in RISK_LEVELS:
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": f"Invalid final_action: {final_action}"})
             return
         override_reason = payload.get("override_reason")
 
-        safe_text = apply_final_action(scan_result, final_action)
+        safe_text = preview_payload["action_options"][final_action]["sent_text"]
         turn_id = session.next_turn_id()
         files = build_turn_file_paths(session, turn_id)
-        files["user_original"].write_text(scan_result.original_text, encoding="utf-8")
+        files["user_original"].write_text(preview_payload["original_text"], encoding="utf-8")
 
-        if scan_result.token_map:
+        token_map = preview_payload["token_map"]
+        if token_map:
             files["token_map"].write_text(
-                json.dumps(scan_result.token_map, ensure_ascii=False, indent=2),
+                json.dumps(token_map, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
 
         if safe_text is None:
             turn_record = TurnRecord(
                 turn_id=turn_id,
-                user_original=scan_result.original_text,
-                user_redacted=scan_result.redacted_text,
-                suggested_action=scan_result.suggested_action,
+                user_original=preview_payload["original_text"],
+                user_redacted=preview_payload["redacted_text"],
+                suggested_action=preview_payload["suggested_action"],
                 final_action=final_action,
                 override_reason=override_reason,
                 user_sent_text="",
                 artifacts={
                     "user_original": str(files["user_original"]),
-                    **({"token_map": str(files["token_map"])} if scan_result.token_map else {}),
+                    **({"token_map": str(files["token_map"])} if token_map else {}),
                 },
             )
             append_turn(session, turn_record)
@@ -193,7 +252,10 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                     "turn_id": turn_id,
                     "final_action": final_action,
                     "blocked": True,
-                    "preview_text": build_preview(scan_result),
+                    "override": final_action != preview_payload["suggested_action"],
+                    "override_reason": override_reason,
+                    "preview_id": preview_id,
+                    "preview_text": preview_payload["preview_text"],
                 },
             )
             return
@@ -215,27 +277,27 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             encoding="utf-8",
         )
         files["assistant_raw"].write_text(model_response.reply_text, encoding="utf-8")
-        restored_reply = restore_response(model_response.reply_text, scan_result.token_map)
+        restored_reply = restore_response(model_response.reply_text, token_map)
         files["assistant_restored"].write_text(restored_reply, encoding="utf-8")
 
         turn_record = TurnRecord(
             turn_id=turn_id,
-            user_original=scan_result.original_text,
-            user_redacted=scan_result.redacted_text,
-            suggested_action=scan_result.suggested_action,
+            user_original=preview_payload["original_text"],
+            user_redacted=preview_payload["redacted_text"],
+            suggested_action=preview_payload["suggested_action"],
             final_action=final_action,
             override_reason=override_reason,
             user_sent_text=safe_text,
             codex_raw_reply=model_response.reply_text,
             codex_restored_reply=restored_reply,
-            token_map_path=str(files["token_map"]) if scan_result.token_map else None,
+            token_map_path=str(files["token_map"]) if token_map else None,
             artifacts={
                 "user_original": str(files["user_original"]),
                 "user_safe": str(files["user_safe"]),
                 "model_raw": str(files["model_raw"]),
                 "assistant_raw": str(files["assistant_raw"]),
                 "assistant_restored": str(files["assistant_restored"]),
-                **({"token_map": str(files["token_map"])} if scan_result.token_map else {}),
+                **({"token_map": str(files["token_map"])} if token_map else {}),
             },
         )
         append_turn(session, turn_record)
@@ -243,14 +305,16 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
         self._write_json(
             HTTPStatus.OK,
             {
+                "preview_id": preview_id,
                 "session_id": session_id,
                 "turn_id": turn_id,
                 "profile": session.profile,
-                "suggested_action": scan_result.suggested_action,
+                "suggested_action": preview_payload["suggested_action"],
                 "final_action": final_action,
+                "override": final_action != preview_payload["suggested_action"],
                 "override_reason": override_reason,
-                "original_text": scan_result.original_text,
-                "redacted_text": scan_result.redacted_text,
+                "original_text": preview_payload["original_text"],
+                "redacted_text": preview_payload["redacted_text"],
                 "sent_text": safe_text,
                 "assistant_reply": restored_reply,
                 "assistant_raw_reply": model_response.reply_text,
