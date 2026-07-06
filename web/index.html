@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Privacy Guard</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Agent Privacy Guard</p>
+        <h1>发送前治理控制台</h1>
+        <p class="hero-copy">先预览、再脱敏、再确认。这个页面直接串起你现有的会话后端，让敏感内容在离开本机前就被看见和处理。</p>
+      </div>
+      <div class="hero-status">
+        <span class="status-dot"></span>
+        <span id="healthText">Checking API...</span>
+      </div>
+    </header>
+
+    <main class="dashboard">
+      <section class="panel panel-accent">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Session</p>
+            <h2>会话控制</h2>
+          </div>
+        </div>
+
+        <form id="sessionForm" class="stack-form">
+          <label>
+            <span>Profile</span>
+            <select id="profileSelect" name="profile">
+              <option value="coding">coding</option>
+              <option value="office">office</option>
+              <option value="finance">finance</option>
+            </select>
+          </label>
+          <label>
+            <span>Session ID</span>
+            <input id="sessionIdInput" name="session_id" type="text" placeholder="例如 demo-session">
+          </label>
+          <div class="button-row">
+            <button type="submit" class="button button-primary">创建会话</button>
+            <button type="button" id="loadSessionButton" class="button button-secondary">加载历史会话</button>
+          </div>
+        </form>
+
+        <div id="sessionCard" class="session-card muted-card">
+          <p>还没有会话。先创建一个 session，再进行 preview / confirm。</p>
+        </div>
+      </section>
+
+      <section class="panel panel-wide">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Preview</p>
+            <h2>发送前预览</h2>
+          </div>
+        </div>
+
+        <form id="previewForm" class="stack-form">
+          <label>
+            <span>Message</span>
+            <textarea id="messageInput" rows="8" placeholder="输入准备发给模型的内容"></textarea>
+          </label>
+          <div class="button-row">
+            <button type="submit" class="button button-primary">生成 Preview</button>
+          </div>
+        </form>
+
+        <div id="previewEmpty" class="muted-card">
+          <p>这里会展示原文、脱敏文、风险等级和建议动作。</p>
+        </div>
+
+        <div id="previewPanel" class="preview-panel hidden">
+          <div class="metrics-grid">
+            <div class="metric">
+              <span class="metric-label">Suggested Action</span>
+              <strong id="suggestedActionBadge" class="action-badge">-</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Risk Level</span>
+              <strong id="riskBadge" class="risk-badge">-</strong>
+            </div>
+            <div class="metric">
+              <span class="metric-label">Preview ID</span>
+              <strong id="previewIdText">-</strong>
+            </div>
+          </div>
+
+          <div class="dual-pane">
+            <article class="text-card">
+              <h3>Original</h3>
+              <pre id="originalText"></pre>
+            </article>
+            <article class="text-card">
+              <h3>Redacted</h3>
+              <pre id="redactedText"></pre>
+            </article>
+          </div>
+
+          <article class="findings-card">
+            <h3>Decision</h3>
+            <p id="previewSummary" class="summary-text"></p>
+            <div id="actionButtons" class="action-button-grid"></div>
+            <label id="overrideField" class="hidden">
+              <span>Override Reason</span>
+              <input id="overrideReasonInput" type="text" placeholder="当你的选择和建议动作不一致时填写">
+            </label>
+            <div class="button-row">
+              <button type="button" id="confirmButton" class="button button-primary">确认并发送</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">Result</p>
+            <h2>本轮结果</h2>
+          </div>
+        </div>
+        <div id="resultPanel" class="muted-card">
+          <p>确认后，这里会展示最终动作、回复内容和产物路径。</p>
+        </div>
+      </section>
+
+      <section class="panel panel-wide">
+        <div class="panel-heading">
+          <div>
+            <p class="panel-kicker">History</p>
+            <h2>会话历史</h2>
+          </div>
+        </div>
+        <div id="historyPanel" class="history-list muted-card">
+          <p>加载会话后，这里会显示 turn 历史。</p>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

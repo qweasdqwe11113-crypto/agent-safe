@@ -1,0 +1,27 @@
+{
+  "session_id": "test1",
+  "profile": "coding",
+  "created_at": "2026-07-06T17:18:35",
+  "session_dir": "outputs\\api-sessions\\test1",
+  "turns": [
+    {
+      "turn_id": 1,
+      "user_original": "hi，im donkzz",
+      "user_redacted": "hi，im donkzz",
+      "suggested_action": "allow",
+      "final_action": "allow",
+      "override_reason": null,
+      "user_sent_text": "hi，im donkzz",
+      "codex_raw_reply": "Hi donkzz! How can I help?",
+      "codex_restored_reply": "Hi donkzz! How can I help?",
+      "token_map_path": null,
+      "artifacts": {
+        "user_original": "outputs\\api-sessions\\test1\\turn-001-user-original.txt",
+        "user_safe": "outputs\\api-sessions\\test1\\turn-001-user-safe.txt",
+        "model_raw": "outputs\\api-sessions\\test1\\turn-001-model-raw.json",
+        "assistant_raw": "outputs\\api-sessions\\test1\\turn-001-assistant-raw.txt",
+        "assistant_restored": "outputs\\api-sessions\\test1\\turn-001-assistant-restored.txt"
+      }
+    }
+  ]
+}

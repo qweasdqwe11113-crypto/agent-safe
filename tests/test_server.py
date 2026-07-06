@@ -99,6 +99,13 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn("Use /preview first", result["error"])
 
+    def test_root_serves_web_console(self) -> None:
+        request = urllib.request.Request(f"{self.base_url}/", method="GET")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = response.read().decode("utf-8")
+        self.assertIn("Agent Privacy Guard", body)
+        self.assertIn("发送前治理控制台", body)
+
 
 if __name__ == "__main__":
     unittest.main()

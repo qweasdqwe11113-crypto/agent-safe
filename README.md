@@ -132,6 +132,20 @@ Agent Privacy Guard API listening on http://127.0.0.1:8000
 Model provider: mock (mock-gpt)
 ```
 
+启动后也可以直接在浏览器打开：
+
+```text
+http://127.0.0.1:8000/
+```
+
+Web 控制台已经接通当前主流程：
+
+- 创建或加载 session
+- 输入消息并调用 `/preview`
+- 查看原文 / 脱敏文 / 风险等级 / 建议动作
+- 选择 `allow / mask / block`
+- 调用 `/confirm` 并查看回复与历史 turn
+
 ### 2. rightcode 真实模型模式
 
 当前代码会自动读取：
