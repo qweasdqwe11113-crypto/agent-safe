@@ -30,17 +30,35 @@ class RedactScriptTests(unittest.TestCase):
     def test_json_recursive_redaction(self) -> None:
         payload = json.dumps(
             {
-                "user": {"email": "test@example.com", "phone": "13800138000"},
+                "user": {
+                    "name": "张三",
+                    "email": "test@example.com",
+                    "phone": "13800138000",
+                    "address": "广东省深圳市南山区科技园科苑路 15 号",
+                    "id_card": "440305199901011234",
+                },
                 "authToken": "super-secret-token-value",
                 "notes": ["server ip is 192.168.1.10"],
             }
         )
         result = self.run_script(payload)
         data = json.loads(result.stdout)
+        self.assertTrue(data["user"]["name"].startswith("[PERSON_NAME_"))
         self.assertTrue(data["user"]["email"].startswith("[USER_EMAIL_"))
         self.assertTrue(data["user"]["phone"].startswith("[PHONE_NUMBER_"))
+        self.assertTrue(data["user"]["address"].startswith("[STREET_ADDRESS_"))
+        self.assertTrue(data["user"]["id_card"].startswith("[NATIONAL_ID_"))
         self.assertTrue(data["authToken"].startswith("[SENSITIVE_SECRET_"))
         self.assertIn("[IPV4_ADDRESS_", data["notes"][0])
+
+    def test_plain_text_name_address_and_id_redaction(self) -> None:
+        result = self.run_script(
+            "name=Zhang San\naddress=Room 502, 88 College Rd\nid_card=440305199901011234\n"
+        )
+        stdout = result.stdout
+        self.assertIn("[PERSON_NAME_", stdout)
+        self.assertIn("[STREET_ADDRESS_", stdout)
+        self.assertIn("[NATIONAL_ID_", stdout)
 
     def test_map_output_and_restore_round_trip(self) -> None:
         original = "email=test@example.com\nphone=13800138000\n"

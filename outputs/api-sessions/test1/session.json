@@ -22,6 +22,25 @@
         "assistant_raw": "outputs\\api-sessions\\test1\\turn-001-assistant-raw.txt",
         "assistant_restored": "outputs\\api-sessions\\test1\\turn-001-assistant-restored.txt"
       }
+    },
+    {
+      "turn_id": 2,
+      "user_original": "看看所有的对话",
+      "user_redacted": "看看所有的对话",
+      "suggested_action": "allow",
+      "final_action": "allow",
+      "override_reason": null,
+      "user_sent_text": "看看所有的对话",
+      "codex_raw_reply": "到目前为止，对话内容是：\n\n1. 你：hi，im donkzz\n2. 我：Hi donkzz! How can I help?\n3. 你：看看所有的对话\n\n如果你愿意，我也可以帮你整理成更清晰的聊天记录。",
+      "codex_restored_reply": "到目前为止，对话内容是：\n\n1. 你：hi，im donkzz\n2. 我：Hi donkzz! How can I help?\n3. 你：看看所有的对话\n\n如果你愿意，我也可以帮你整理成更清晰的聊天记录。",
+      "token_map_path": null,
+      "artifacts": {
+        "user_original": "outputs\\api-sessions\\test1\\turn-002-user-original.txt",
+        "user_safe": "outputs\\api-sessions\\test1\\turn-002-user-safe.txt",
+        "model_raw": "outputs\\api-sessions\\test1\\turn-002-model-raw.json",
+        "assistant_raw": "outputs\\api-sessions\\test1\\turn-002-assistant-raw.txt",
+        "assistant_restored": "outputs\\api-sessions\\test1\\turn-002-assistant-restored.txt"
+      }
     }
   ]
 }

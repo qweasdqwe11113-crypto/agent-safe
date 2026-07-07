@@ -15,6 +15,7 @@ if str(PLUGIN_ROOT) not in sys.path:
 
 from core.redactor import redact_text  # noqa: E402
 from core.vault import restore_string, save_token_map  # noqa: E402
+from ner_adapter import detect_entities  # noqa: E402
 
 
 PROFILE_POLICIES = {
@@ -44,6 +45,9 @@ LABEL_CATEGORIES = {
     "GENERIC_TOKEN": "secret",
     "USER_EMAIL": "pii",
     "PHONE_NUMBER": "pii",
+    "PERSON_NAME": "pii",
+    "STREET_ADDRESS": "pii",
+    "NATIONAL_ID": "pii",
     "PAYMENT_CARD": "finance",
     "IPV4_ADDRESS": "network",
     "IPV6_ADDRESS": "network",
@@ -100,6 +104,9 @@ def suggest_action(labels: set[str], profile: str) -> str:
 
 def scan_text(text: str, profile: str) -> ScanResult:
     redacted_text, token_map = redact_text(text)
+    entity_spans = detect_entities(redacted_text)
+    if entity_spans:
+        redacted_text = apply_entity_redaction(redacted_text, token_map, entity_spans)
     labels = {extract_label(token) for token in token_map}
     return ScanResult(
         profile=profile,
@@ -109,6 +116,23 @@ def scan_text(text: str, profile: str) -> ScanResult:
         labels=labels,
         suggested_action=suggest_action(labels, profile),
     )
+
+
+def apply_entity_redaction(text: str, token_map: dict[str, str], entity_spans) -> str:
+    result = text
+    for span in sorted(entity_spans, key=lambda item: item.start, reverse=True):
+        token = f"[{span.label}_{hash_token_source(span.text)}]"
+        if token in token_map and token_map[token] != span.text:
+            continue
+        token_map[token] = span.text
+        result = result[: span.start] + token + result[span.end :]
+    return result
+
+
+def hash_token_source(value: str) -> str:
+    from hashlib import sha256
+
+    return sha256(value.encode("utf-8")).hexdigest()[:6]
 
 
 def build_preview(scan_result: ScanResult) -> str:

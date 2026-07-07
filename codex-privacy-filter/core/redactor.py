@@ -4,6 +4,51 @@ import re
 
 from .utils import is_sensitive_key, make_token
 
+
+NAME_FIELD_KEYS = (
+    "name",
+    "full_name",
+    "real_name",
+    "legal_name",
+    "contact_name",
+    "username",
+    "user_name",
+    "姓名",
+    "联系人",
+    "收件人",
+)
+
+ADDRESS_FIELD_KEYS = (
+    "address",
+    "home_address",
+    "street_address",
+    "shipping_address",
+    "billing_address",
+    "mailing_address",
+    "详细地址",
+    "收货地址",
+    "家庭住址",
+    "住址",
+    "地址",
+)
+
+ID_FIELD_KEYS = (
+    "id_number",
+    "national_id",
+    "citizen_id",
+    "identity_number",
+    "identity_no",
+    "id_card",
+    "idcard",
+    "passport_number",
+    "passport_no",
+    "身份证",
+    "身份证号",
+    "证件号",
+    "证件号码",
+    "护照号",
+)
+
 TYPE_PATTERNS = [
     ("OPENAI_KEY", re.compile(r"(?i)\bsk-[a-z0-9]{20,}\b")),
     ("ANTHROPIC_KEY", re.compile(r"\bsk-ant-[a-zA-Z0-9_-]{20,}\b")),
@@ -12,6 +57,7 @@ TYPE_PATTERNS = [
     ("STRIPE_SECRET", re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,99}\b")),
     ("USER_EMAIL", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
     ("PHONE_NUMBER", re.compile(r"\b1[3-9]\d{9}\b")),
+    ("NATIONAL_ID", re.compile(r"\b\d{17}[\dXx]\b")),
     ("IPV4_ADDRESS", re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")),
     ("IPV6_ADDRESS", re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b")),
     ("PAYMENT_CARD", re.compile(r"\b(?:\d[ -]*?){13,16}\b")),
@@ -28,6 +74,26 @@ KEY_VALUE_SECRET = re.compile(
     r"(?i)\b(api[_-]?key|secret|token|passwd|password)\b(\s*[:=]\s*[\"']?)([^\s\"']+)"
 )
 AUTH_BEARER = re.compile(r"(?i)\b(authorization\s*:\s*bearer\s+)([^\s]+)")
+PII_KEY_VALUE = re.compile(
+    r"(?i)\b([a-z_][a-z0-9_-]*|姓名|联系人|收件人|详细地址|收货地址|家庭住址|住址|地址|身份证|身份证号|证件号|证件号码|护照号)"
+    r"\b(\s*[:=：]\s*[\"']?)([^\n\r\"']+)"
+)
+
+
+def normalize_key_name(key_name: str) -> str:
+    return key_name.lower().replace("-", "").replace("_", "").replace(" ", "")
+
+
+def pii_label_for_key(key_name: str) -> str | None:
+    normalized = normalize_key_name(key_name)
+
+    if any(normalize_key_name(candidate) in normalized for candidate in NAME_FIELD_KEYS):
+        return "PERSON_NAME"
+    if any(normalize_key_name(candidate) in normalized for candidate in ADDRESS_FIELD_KEYS):
+        return "STREET_ADDRESS"
+    if any(normalize_key_name(candidate) in normalized for candidate in ID_FIELD_KEYS):
+        return "NATIONAL_ID"
+    return None
 
 
 def redact_string(text: str, token_map: dict[str, str]) -> str:
@@ -48,6 +114,14 @@ def redact_string(text: str, token_map: dict[str, str]) -> str:
         result,
     )
 
+    def replace_pii_key_value(match):
+        label = pii_label_for_key(match.group(1))
+        if not label:
+            return match.group(0)
+        return f"{match.group(1)}{match.group(2)}{replace_with_token(label, match.group(3).strip())}"
+
+    result = PII_KEY_VALUE.sub(replace_pii_key_value, result)
+
     for label, pattern in TYPE_PATTERNS:
         result = pattern.sub(lambda match: replace_with_token(label, match.group(0)), result)
 
@@ -56,6 +130,11 @@ def redact_string(text: str, token_map: dict[str, str]) -> str:
 
 def redact_content(node, token_map: dict[str, str], key_name: str | None = None):
     if isinstance(node, str):
+        pii_label = pii_label_for_key(key_name) if key_name else None
+        if pii_label:
+            token = make_token(pii_label, node)
+            token_map[token] = node
+            return token
         if key_name and is_sensitive_key(key_name):
             token = make_token("SENSITIVE_SECRET", node)
             token_map[token] = node

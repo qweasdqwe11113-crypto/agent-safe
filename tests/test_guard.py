@@ -47,6 +47,32 @@ class GuardScriptTests(unittest.TestCase):
         self.assertIn("User Email: 1", stdout)
         self.assertIn("Phone Number: 1", stdout)
 
+    def test_name_address_and_id_are_treated_as_pii(self) -> None:
+        result = self.run_guard(
+            "--stdin",
+            "--profile",
+            "coding",
+            input_text="name=Zhang San\naddress=Room 502, 88 College Rd\nid_card=440305199901011234\n",
+        )
+        stdout = result.stdout
+        self.assertIn("Risk Level: MEDIUM", stdout)
+        self.assertIn("Suggested Action: MASK", stdout)
+        self.assertIn("Person Name: 1", stdout)
+        self.assertIn("Street Address: 1", stdout)
+        self.assertIn("National Id: 1", stdout)
+
+    def test_free_text_ner_like_detection_finds_name_and_address(self) -> None:
+        result = self.run_guard(
+            "--stdin",
+            "--profile",
+            "coding",
+            input_text="我叫张三，住在深圳市南山区科技园科苑路15号。\n",
+        )
+        stdout = result.stdout
+        self.assertIn("Risk Level: MEDIUM", stdout)
+        self.assertIn("Person Name: 1", stdout)
+        self.assertIn("Street Address: 1", stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -52,6 +52,7 @@ Web / Client
 
 - 敏感信息检测与脱敏
 - PII / secret / network 基础规则
+- 可选 HanLP 增强中文 NER 检测
 - `allow / mask / block`
 - 发送前 preview
 - token map 保存与恢复
@@ -326,6 +327,100 @@ python session_guard.py --profile coding
 python -m unittest tests.test_model_client tests.test_server tests.test_session_state tests.test_guard tests.test_guard_override tests.test_guard_codex tests.test_redact
 ```
 
+## HanLP 增强中文 PII 检测
+
+当前项目已经支持通过本地 HanLP 模型增强中文文本中的 PII 检测能力，适合处理“不是固定键值对，而是自然语言直接描述”的场景。
+
+例如下面这种自由文本：
+
+```text
+我叫张三，住在深圳市南山区科技园科苑路15号，身份证号是440305199901011234
+```
+
+在接入 HanLP 后，可以识别出：
+
+- `Person Name`
+- `Street Address`
+- `National Id`
+
+并自动并入现有的 `allow / mask / block` 决策链路。
+
+### 说明
+
+- 当前项目中的 NER 接口由 [ner_adapter.py](C:/Users/jiahjq/Desktop/summer_projection/ner_adapter.py) 提供
+- 如果本机已安装并可加载 HanLP，则优先使用 HanLP
+- 如果 HanLP 不可用，则自动回退到轻量启发式识别
+- 当前 HanLP 主要用于增强中文自由文本中的姓名、地址、证件号识别
+
+### 安装 HanLP
+
+先安装 HanLP：
+
+```powershell
+pip install hanlp
+```
+
+如需完整依赖，也可以安装：
+
+```powershell
+pip install hanlp[full]
+```
+
+### 下载并加载 HanLP NER 模型
+
+第一次使用前，建议手动触发一次模型下载：
+
+```powershell
+python -c "import hanlp; import hanlp.pretrained.ner as ner; hanlp.load(ner.MSRA_NER_ELECTRA_SMALL_ZH); print('hanlp model ok')"
+```
+
+如果最后输出：
+
+```text
+hanlp model ok
+```
+
+说明 HanLP NER 模型已经成功下载并可用。
+
+### 验证项目是否正在使用 HanLP
+
+运行：
+
+```powershell
+python -c "from ner_adapter import _load_backend; print(_load_backend()[0])"
+```
+
+如果输出：
+
+```text
+hanlp
+```
+
+说明当前项目已经切换到 HanLP 后端，而不是启发式回退模式。
+
+### 验证自由文本检测效果
+
+可以直接运行：
+
+```powershell
+python guard.py --stdin --profile coding
+```
+
+输入示例：
+
+```text
+我叫张三，住在深圳市南山区科技园科苑路15号，身份证号是440305199901011234
+```
+
+结束输入后，预期会看到类似结果：
+
+- `Person Name: 1`
+- `Street Address: 1`
+- `National Id: 1`
+- `Suggested Action: MASK`
+
+说明自由文本里的姓名、地址、证件号已经能被 HanLP 增强识别并脱敏。
+
 ## 当前已验证的能力
 
 当前已经在本机验证过：
@@ -337,6 +432,7 @@ python -m unittest tests.test_model_client tests.test_server tests.test_session_
 - token 恢复成功
 - `rightcode` 能返回真实模型回复
 - 多轮上下文能被模型记住
+- HanLP 增强的中文自由文本 PII 检测可用
 
 例如下面这个结果就说明已经是真实模型回复：
 
@@ -367,6 +463,62 @@ Sure:
 - 当前已通过回退到 `chat/completions` 兼容调用解决这一问题
 - 当前前端界面还没有完成，主线先是 API 后端
 - 当前还不是 Codex 应用内原生 UI 插件，而是本地会话代理/包装器
+
+## 规则覆盖现状
+
+如果按下面这 4 类目标来衡量：
+
+1. PII 检测：姓名、电话、邮箱、地址、证件号等
+2. Secret scanning：API key、token、私钥、数据库 URL、云凭据等
+3. 文件与路径规则：例如 `.env`、`id_rsa`、`credentials.json`、`node_modules`、大型二进制文件、内部配置目录
+4. 代码和日志规则：内部 endpoint、cookie、authorization header、错误堆栈中的用户信息
+
+那么当前项目状态是：
+
+**已经做到“基础可用”，但还没有完全达到上述完整目标。**
+
+### 当前已经覆盖
+
+- 姓名（基于常见字段名）
+- 邮箱
+- 手机号
+- 地址（基于常见字段名）
+- 证件号（当前已覆盖中国大陆身份证号等常见字段）
+- IPv4 / IPv6 地址
+- 支付卡号
+- `Authorization: Bearer ...`
+- 常见 secret / key / token 键值
+- OpenAI key
+- Anthropic key
+- GitHub token
+- NPM token
+- Stripe secret
+- 私钥块
+- JSON 递归扫描与脱敏
+- 可选 NER 式自由文本实体识别接口（当前默认回退为轻量启发式识别，可在本机安装 HanLP / spaCy 后接入真实 NER 后端）
+- 基于 profile 的 `allow / mask / block`
+
+### 当前还明显缺失
+
+- 数据库 URL
+- 云凭据（AWS / GCP / Azure 等）
+- Cookie
+- 内部 endpoint / 内网 URL 专项规则
+- 错误堆栈中的用户信息专项规则
+- 文件名 / 路径 / 目录规则
+- 大文件 / 二进制文件规则
+
+### 当前结论
+
+因此，如果目标是“演示发送前隐私过滤原型”，当前版本已经可以支撑基础展示；
+如果目标是“覆盖更完整的企业级敏感信息检查范围”，当前规则体系还需要继续补齐。
+
+### 建议下一步优先级
+
+1. 先补 Secret 缺口：数据库 URL、云凭据
+2. 再补代码与日志规则：Cookie、内部 endpoint、错误堆栈中的用户信息
+3. 再补文件名 / 路径 / 目录规则
+4. 最后补大文件 / 二进制文件规则
 
 ## 下一步
 

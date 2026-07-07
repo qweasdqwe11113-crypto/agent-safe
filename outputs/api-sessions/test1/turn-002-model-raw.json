@@ -1,0 +1,27 @@
+{
+  "id": "resp_0f4429323fb4921d016a4b7350896081968857773d164e227d",
+  "object": "chat.completion",
+  "created": 1783329631,
+  "model": "gpt-5.4",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "到目前为止，对话内容是：\n\n1. 你：hi，im donkzz\n2. 我：Hi donkzz! How can I help?\n3. 你：看看所有的对话\n\n如果你愿意，我也可以帮你整理成更清晰的聊天记录。"
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 352,
+    "completion_tokens": 68,
+    "total_tokens": 420,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 0
+    }
+  }
+}
