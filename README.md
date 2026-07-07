@@ -493,6 +493,8 @@ Sure:
 - GitHub token
 - NPM token
 - Stripe secret
+- 数据库 URL（如 `postgres://`、`mysql://`、`mongodb://`、`redis://`）
+- 云凭据基础规则（如 AWS Access Key / Secret、Azure Storage Connection String、常见云凭据字段）
 - 私钥块
 - JSON 递归扫描与脱敏
 - 可选 NER 式自由文本实体识别接口（当前默认回退为轻量启发式识别，可在本机安装 HanLP / spaCy 后接入真实 NER 后端）
@@ -500,8 +502,7 @@ Sure:
 
 ### 当前还明显缺失
 
-- 数据库 URL
-- 云凭据（AWS / GCP / Azure 等）
+- 更完整的云凭据覆盖（例如 GCP service account 结构专项、Azure / AWS 更多变体）
 - Cookie
 - 内部 endpoint / 内网 URL 专项规则
 - 错误堆栈中的用户信息专项规则

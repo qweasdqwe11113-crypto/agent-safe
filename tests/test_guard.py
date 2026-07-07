@@ -73,6 +73,24 @@ class GuardScriptTests(unittest.TestCase):
         self.assertIn("Person Name: 1", stdout)
         self.assertIn("Street Address: 1", stdout)
 
+    def test_database_url_and_cloud_credentials_block_as_secret(self) -> None:
+        result = self.run_guard(
+            "--stdin",
+            "--profile",
+            "coding",
+            input_text=(
+                "DATABASE_URL=postgres://demo:secretpass@db.internal:5432/appdb\n"
+                "aws_access_key_id=AKIAIOSFODNN7EXAMPLE\n"
+                "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+            ),
+        )
+        stdout = result.stdout
+        self.assertIn("Risk Level: HIGH", stdout)
+        self.assertIn("Suggested Action: BLOCK", stdout)
+        self.assertIn("Database Url: 1", stdout)
+        self.assertIn("Aws Access Key: 1", stdout)
+        self.assertIn("Aws Secret Key: 1", stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

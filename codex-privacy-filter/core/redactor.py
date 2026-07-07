@@ -49,6 +49,30 @@ ID_FIELD_KEYS = (
     "护照号",
 )
 
+DATABASE_FIELD_KEYS = (
+    "database_url",
+    "db_url",
+    "db_uri",
+    "database_uri",
+    "sqlalchemy_database_uri",
+    "mongo_uri",
+    "mongodb_uri",
+    "redis_url",
+    "jdbc_url",
+)
+
+CLOUD_CREDENTIAL_FIELD_KEYS = (
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "gcp_credentials",
+    "gcp_service_account",
+    "azure_storage_connection_string",
+    "azure_connection_string",
+    "accountkey",
+    "client_secret",
+)
+
 TYPE_PATTERNS = [
     ("OPENAI_KEY", re.compile(r"(?i)\bsk-[a-z0-9]{20,}\b")),
     ("ANTHROPIC_KEY", re.compile(r"\bsk-ant-[a-zA-Z0-9_-]{20,}\b")),
@@ -58,6 +82,10 @@ TYPE_PATTERNS = [
     ("USER_EMAIL", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
     ("PHONE_NUMBER", re.compile(r"\b1[3-9]\d{9}\b")),
     ("NATIONAL_ID", re.compile(r"\b\d{17}[\dXx]\b")),
+    ("DATABASE_URL", re.compile(r"\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|amqp|jdbc):\/\/[^\s\"']+\b", re.IGNORECASE)),
+    ("AWS_ACCESS_KEY", re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")),
+    ("AWS_SECRET_KEY", re.compile(r"(?<![A-Za-z0-9\/+=])[A-Za-z0-9\/+=]{40}(?![A-Za-z0-9\/+=])")),
+    ("AZURE_CONN_STRING", re.compile(r"\bDefaultEndpointsProtocol=https;AccountName=[^;\s]+;AccountKey=[^;\s]+(?:;EndpointSuffix=[^;\s]+)?", re.IGNORECASE)),
     ("IPV4_ADDRESS", re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")),
     ("IPV6_ADDRESS", re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b")),
     ("PAYMENT_CARD", re.compile(r"\b(?:\d[ -]*?){13,16}\b")),
@@ -78,6 +106,10 @@ PII_KEY_VALUE = re.compile(
     r"(?i)\b([a-z_][a-z0-9_-]*|姓名|联系人|收件人|详细地址|收货地址|家庭住址|住址|地址|身份证|身份证号|证件号|证件号码|护照号)"
     r"\b(\s*[:=：]\s*[\"']?)([^\n\r\"']+)"
 )
+SECRET_KEY_VALUE = re.compile(
+    r"(?i)\b([a-z_][a-z0-9_-]*|数据库地址|数据库连接串|云凭据|云密钥|访问密钥|连接字符串)"
+    r"\b(\s*[:=：]\s*[\"']?)([^\n\r\"']+)"
+)
 
 
 def normalize_key_name(key_name: str) -> str:
@@ -93,6 +125,26 @@ def pii_label_for_key(key_name: str) -> str | None:
         return "STREET_ADDRESS"
     if any(normalize_key_name(candidate) in normalized for candidate in ID_FIELD_KEYS):
         return "NATIONAL_ID"
+    return None
+
+
+def secret_label_for_key(key_name: str, value: str) -> str | None:
+    normalized = normalize_key_name(key_name)
+
+    if normalized in {"privatekey", "private_key"}:
+        return "PRIVATE_KEY"
+    if normalized in {"awsaccesskeyid"}:
+        return "AWS_ACCESS_KEY"
+    if normalized in {"awssecretaccesskey"}:
+        return "AWS_SECRET_KEY"
+    if normalized in {"azurestorageconnectionstring", "azureconnectionstring", "accountkey"}:
+        return "AZURE_CONN_STRING"
+    if any(normalize_key_name(candidate) in normalized for candidate in DATABASE_FIELD_KEYS):
+        return "DATABASE_URL"
+    if any(normalize_key_name(candidate) in normalized for candidate in CLOUD_CREDENTIAL_FIELD_KEYS):
+        return "CLOUD_CREDENTIAL"
+    if normalized in {"clientemail"} and value.endswith(".gserviceaccount.com"):
+        return "CLOUD_CREDENTIAL"
     return None
 
 
@@ -122,6 +174,14 @@ def redact_string(text: str, token_map: dict[str, str]) -> str:
 
     result = PII_KEY_VALUE.sub(replace_pii_key_value, result)
 
+    def replace_secret_key_value(match):
+        label = secret_label_for_key(match.group(1), match.group(3).strip())
+        if not label:
+            return match.group(0)
+        return f"{match.group(1)}{match.group(2)}{replace_with_token(label, match.group(3).strip())}"
+
+    result = SECRET_KEY_VALUE.sub(replace_secret_key_value, result)
+
     for label, pattern in TYPE_PATTERNS:
         result = pattern.sub(lambda match: replace_with_token(label, match.group(0)), result)
 
@@ -133,6 +193,11 @@ def redact_content(node, token_map: dict[str, str], key_name: str | None = None)
         pii_label = pii_label_for_key(key_name) if key_name else None
         if pii_label:
             token = make_token(pii_label, node)
+            token_map[token] = node
+            return token
+        secret_label = secret_label_for_key(key_name, node) if key_name else None
+        if secret_label:
+            token = make_token(secret_label, node)
             token_map[token] = node
             return token
         if key_name and is_sensitive_key(key_name):

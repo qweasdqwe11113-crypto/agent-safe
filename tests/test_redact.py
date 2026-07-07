@@ -60,6 +60,20 @@ class RedactScriptTests(unittest.TestCase):
         self.assertIn("[STREET_ADDRESS_", stdout)
         self.assertIn("[NATIONAL_ID_", stdout)
 
+    def test_database_url_and_cloud_credentials_redaction(self) -> None:
+        payload = (
+            "DATABASE_URL=postgres://demo:secretpass@db.internal:5432/appdb\n"
+            "aws_access_key_id=AKIAIOSFODNN7EXAMPLE\n"
+            "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+            "azure_connection_string=DefaultEndpointsProtocol=https;AccountName=demo;AccountKey=abc123xyz456;EndpointSuffix=core.windows.net\n"
+        )
+        result = self.run_script(payload)
+        stdout = result.stdout
+        self.assertIn("[DATABASE_URL_", stdout)
+        self.assertIn("[AWS_ACCESS_KEY_", stdout)
+        self.assertIn("[AWS_SECRET_KEY_", stdout)
+        self.assertIn("[AZURE_CONN_STRING_", stdout)
+
     def test_map_output_and_restore_round_trip(self) -> None:
         original = "email=test@example.com\nphone=13800138000\n"
         with tempfile.TemporaryDirectory() as tmpdir:
