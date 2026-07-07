@@ -47,6 +47,44 @@ class GuardScriptTests(unittest.TestCase):
         self.assertIn("User Email: 1", stdout)
         self.assertIn("Phone Number: 1", stdout)
 
+    def test_sensitive_file_name_blocks_even_without_secret_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / ".env"
+            input_path.write_text("HELLO=world\n", encoding="utf-8")
+
+            result = self.run_guard(str(input_path), "--profile", "coding")
+
+        stdout = result.stdout
+        self.assertIn("Risk Level: HIGH", stdout)
+        self.assertIn("Suggested Action: BLOCK", stdout)
+        self.assertIn("Sensitive File Name: 1", stdout)
+
+    def test_binary_file_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "image.png"
+            input_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+
+            result = self.run_guard(str(input_path), "--profile", "coding")
+
+        stdout = result.stdout
+        self.assertIn("Risk Level: HIGH", stdout)
+        self.assertIn("Suggested Action: BLOCK", stdout)
+        self.assertIn("Binary File: 1", stdout)
+
+    def test_sensitive_directory_is_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            nested_dir = Path(tmpdir) / "node_modules"
+            nested_dir.mkdir(parents=True, exist_ok=True)
+            input_path = nested_dir / "notes.txt"
+            input_path.write_text("hello\n", encoding="utf-8")
+
+            result = self.run_guard(str(input_path), "--profile", "coding")
+
+        stdout = result.stdout
+        self.assertIn("Risk Level: HIGH", stdout)
+        self.assertIn("Suggested Action: BLOCK", stdout)
+        self.assertIn("Sensitive Directory: 1", stdout)
+
     def test_name_address_and_id_are_treated_as_pii(self) -> None:
         result = self.run_guard(
             "--stdin",

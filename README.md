@@ -53,6 +53,7 @@ Web / Client
 - 敏感信息检测与脱敏
 - PII / secret / network 基础规则
 - 可选 HanLP 增强中文 NER 检测
+- CLI 文件级输入规则
 - `allow / mask / block`
 - 发送前 preview
 - token map 保存与恢复
@@ -307,6 +308,23 @@ outputs/api-sessions/<session-id>/
 python guard.py examples\plain-input.txt --profile coding
 ```
 
+当前 CLI 不仅支持把输入当作普通文本扫描，也支持对“整文件输入”执行额外的文件级检查。对于文件输入，当前已增加：
+
+- 敏感文件名规则，例如 `.env`、`id_rsa`、`credentials.json`
+- 敏感目录规则，例如 `node_modules`、`.git`、`.ssh`、`.aws`、`.kube`
+- 二进制文件检测
+- 大文件检测
+
+这意味着当用户直接把某个文件作为输入交给 wrapper 时，系统不只扫描文件内容本身，还会结合文件名、所在目录、文件类型和文件大小做额外风险判断。
+
+例如：
+
+```powershell
+python guard.py .env --profile coding
+```
+
+如果命中文件级高风险规则，系统会直接进入 `BLOCK` 或更高风险决策，而不只是把文件内容当普通文本处理。
+
 ### 2. 终端会话原型
 
 ```powershell
@@ -433,6 +451,7 @@ python guard.py --stdin --profile coding
 - `rightcode` 能返回真实模型回复
 - 多轮上下文能被模型记住
 - HanLP 增强的中文自由文本 PII 检测可用
+- CLI 文件输入可识别敏感文件名、敏感目录和二进制文件风险
 
 例如下面这个结果就说明已经是真实模型回复：
 
@@ -498,6 +517,7 @@ Sure:
 - 私钥块
 - JSON 递归扫描与脱敏
 - 可选 NER 式自由文本实体识别接口（当前默认回退为轻量启发式识别，可在本机安装 HanLP / spaCy 后接入真实 NER 后端）
+- 文件级输入规则：敏感文件名、敏感目录、二进制文件、大文件
 - 基于 profile 的 `allow / mask / block`
 
 ### 当前还明显缺失
@@ -506,8 +526,7 @@ Sure:
 - Cookie
 - 内部 endpoint / 内网 URL 专项规则
 - 错误堆栈中的用户信息专项规则
-- 文件名 / 路径 / 目录规则
-- 大文件 / 二进制文件规则
+- API 主线中的文件上传 / 文件对象级检查
 
 ### 当前结论
 

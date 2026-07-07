@@ -11,6 +11,7 @@ from guard_core import (
     build_preview,
     build_report,
     restore_response_file,
+    scan_file,
     scan_text,
     write_turn_artifacts,
 )
@@ -151,7 +152,10 @@ def restore_codex_output(codex_output_path: Path, token_map: dict[str, str]) -> 
 
 def main() -> int:
     args = parse_args()
-    scan_result = scan_text(read_input(args), args.profile)
+    if args.stdin:
+        scan_result = scan_text(read_input(args), args.profile)
+    else:
+        scan_result = scan_file(Path(args.input), args.profile)
 
     if args.review:
         sys.stdout.write(build_preview(scan_result))

@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+import string
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 PLUGIN_ROOT = PROJECT_ROOT / "codex-privacy-filter"
@@ -20,15 +21,15 @@ from ner_adapter import detect_entities  # noqa: E402
 
 PROFILE_POLICIES = {
     "coding": {
-        "block_categories": {"secret"},
+        "block_categories": {"secret", "file"},
         "mask_categories": {"pii", "network"},
     },
     "office": {
-        "block_categories": {"secret"},
+        "block_categories": {"secret", "file"},
         "mask_categories": {"pii", "network"},
     },
     "finance": {
-        "block_categories": {"secret", "finance"},
+        "block_categories": {"secret", "finance", "file"},
         "mask_categories": {"pii", "network"},
     },
 }
@@ -48,6 +49,10 @@ LABEL_CATEGORIES = {
     "AWS_SECRET_KEY": "secret",
     "AZURE_CONN_STRING": "secret",
     "CLOUD_CREDENTIAL": "secret",
+    "SENSITIVE_FILE_NAME": "file",
+    "SENSITIVE_DIRECTORY": "file",
+    "BINARY_FILE": "file",
+    "LARGE_FILE": "file",
     "USER_EMAIL": "pii",
     "PHONE_NUMBER": "pii",
     "PERSON_NAME": "pii",
@@ -73,6 +78,53 @@ class ScanResult:
     token_map: dict[str, str]
     labels: set[str]
     suggested_action: str
+
+
+SENSITIVE_FILE_NAMES = {
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.development",
+    "id_rsa",
+    "id_dsa",
+    "credentials.json",
+    ".npmrc",
+}
+
+SENSITIVE_DIRECTORIES = {
+    "node_modules",
+    ".git",
+    ".ssh",
+    ".aws",
+    ".kube",
+    ".config",
+    "secrets",
+    "private",
+}
+
+BINARY_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".pdf",
+    ".zip",
+    ".gz",
+    ".tar",
+    ".7z",
+    ".exe",
+    ".dll",
+    ".so",
+    ".dylib",
+    ".class",
+    ".jar",
+    ".p12",
+    ".pem",
+    ".key",
+}
+
+LARGE_FILE_THRESHOLD_BYTES = 1024 * 1024
 
 
 def extract_label(token: str) -> str:
@@ -121,6 +173,82 @@ def scan_text(text: str, profile: str) -> ScanResult:
         labels=labels,
         suggested_action=suggest_action(labels, profile),
     )
+
+
+def scan_file(path: Path, profile: str) -> ScanResult:
+    payload = path.read_bytes()
+    original_text = build_file_display_text(path, payload)
+    redacted_text = original_text
+    token_map: dict[str, str] = {}
+
+    if not is_binary_payload(path, payload):
+        text_scan = scan_text(payload.decode("utf-8", errors="replace"), profile)
+        original_text = text_scan.original_text
+        redacted_text = text_scan.redacted_text
+        token_map.update(text_scan.token_map)
+
+    add_file_tokens(path, payload, token_map)
+    labels = {extract_label(token) for token in token_map}
+
+    return ScanResult(
+        profile=profile,
+        original_text=original_text,
+        redacted_text=redacted_text,
+        token_map=token_map,
+        labels=labels,
+        suggested_action=suggest_action(labels, profile),
+    )
+
+
+def build_file_display_text(path: Path, payload: bytes) -> str:
+    size = len(payload)
+    if is_binary_payload(path, payload):
+        return f"[Binary file omitted: {path.name} ({size} bytes)]"
+    return payload.decode("utf-8", errors="replace")
+
+
+def add_file_tokens(path: Path, payload: bytes, token_map: dict[str, str]) -> None:
+    normalized_name = path.name.lower()
+    if normalized_name in SENSITIVE_FILE_NAMES:
+        token = make_file_token("SENSITIVE_FILE_NAME", path.name)
+        token_map[token] = path.name
+
+    matched_directories = {
+        part
+        for part in path.parts
+        if part.lower() in SENSITIVE_DIRECTORIES
+    }
+    for directory in matched_directories:
+        token = make_file_token("SENSITIVE_DIRECTORY", directory)
+        token_map[token] = directory
+
+    if is_binary_payload(path, payload):
+        token = make_file_token("BINARY_FILE", path.name)
+        token_map[token] = path.name
+
+    if len(payload) >= LARGE_FILE_THRESHOLD_BYTES:
+        token = make_file_token("LARGE_FILE", f"{path.name}:{len(payload)}")
+        token_map[token] = f"{path.name} ({len(payload)} bytes)"
+
+
+def make_file_token(label: str, value: str) -> str:
+    from hashlib import sha256
+
+    return f"[{label}_{sha256(value.encode('utf-8')).hexdigest()[:6]}]"
+
+
+def is_binary_payload(path: Path, payload: bytes) -> bool:
+    if path.suffix.lower() in BINARY_EXTENSIONS:
+        return True
+    if b"\x00" in payload:
+        return True
+    if not payload:
+        return False
+
+    sample = payload[:2048]
+    text_characters = set(bytes(string.printable, "ascii")) | {9, 10, 13}
+    non_text_count = sum(byte not in text_characters for byte in sample)
+    return (non_text_count / len(sample)) > 0.30
 
 
 def apply_entity_redaction(text: str, token_map: dict[str, str], entity_spans) -> str:
