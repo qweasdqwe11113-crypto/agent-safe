@@ -129,6 +129,24 @@ class GuardScriptTests(unittest.TestCase):
         self.assertIn("Aws Access Key: 1", stdout)
         self.assertIn("Aws Secret Key: 1", stdout)
 
+    def test_code_and_log_rules_cover_cookie_endpoint_and_stack_path(self) -> None:
+        result = self.run_guard(
+            "--stdin",
+            "--profile",
+            "coding",
+            input_text=(
+                "Cookie: sessionid=abc123; csrftoken=xyz987\n"
+                "GET https://internal-api.company.internal/v1/orders\n"
+                "Traceback (most recent call last):\n"
+                "  File \"C:\\Users\\demo\\.ssh\\id_rsa\", line 42, in main\n"
+            ),
+        )
+        stdout = result.stdout
+        self.assertIn("Risk Level: HIGH", stdout)
+        self.assertIn("Cookie Header: 1", stdout)
+        self.assertIn("Internal Endpoint: 1", stdout)
+        self.assertIn("Stack Trace Path: 1", stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

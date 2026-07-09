@@ -74,6 +74,18 @@ class RedactScriptTests(unittest.TestCase):
         self.assertIn("[AWS_SECRET_KEY_", stdout)
         self.assertIn("[AZURE_CONN_STRING_", stdout)
 
+    def test_cookie_internal_endpoint_and_stack_path_redaction(self) -> None:
+        payload = (
+            "Cookie: sessionid=abc123; csrftoken=xyz987\n"
+            "POST https://internal-api.company.internal/v1/orders\n"
+            "File \"C:\\Users\\demo\\.ssh\\id_rsa\", line 42, in main\n"
+        )
+        result = self.run_script(payload)
+        stdout = result.stdout
+        self.assertIn("[COOKIE_HEADER_", stdout)
+        self.assertIn("[INTERNAL_ENDPOINT_", stdout)
+        self.assertIn("[STACK_TRACE_PATH_", stdout)
+
     def test_map_output_and_restore_round_trip(self) -> None:
         original = "email=test@example.com\nphone=13800138000\n"
         with tempfile.TemporaryDirectory() as tmpdir:

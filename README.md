@@ -518,14 +518,13 @@ Sure:
 - JSON 递归扫描与脱敏
 - 可选 NER 式自由文本实体识别接口（当前默认回退为轻量启发式识别，可在本机安装 HanLP / spaCy 后接入真实 NER 后端）
 - 文件级输入规则：敏感文件名、敏感目录、二进制文件、大文件
+- 代码和日志规则基础覆盖：`Authorization header`、`Cookie / Set-Cookie`、内部 endpoint / 内网 URL、错误堆栈中的敏感路径
 - 基于 profile 的 `allow / mask / block`
 
 ### 当前还明显缺失
 
 - 更完整的云凭据覆盖（例如 GCP service account 结构专项、Azure / AWS 更多变体）
-- Cookie
-- 内部 endpoint / 内网 URL 专项规则
-- 错误堆栈中的用户信息专项规则
+- 更完整的错误堆栈中的用户信息专项规则
 - API 主线中的文件上传 / 文件对象级检查
 
 ### 当前结论
