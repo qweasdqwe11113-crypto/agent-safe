@@ -1,0 +1,29 @@
+{
+  "profile": "finance",
+  "title": "财务与法务场景隐私模板",
+  "description": "在允许高层次分析脱敏文本的同时，保护合同、发票、支付和账户相关内容。",
+  "block_categories": ["secret", "finance", "file"],
+  "mask_categories": ["pii", "network"],
+  "sample_inputs": [
+    {
+      "title": "发票处理",
+      "content": "Card 4242 4242 4242 4242 was used by Wang Min for invoice INV-2026-001."
+    },
+    {
+      "title": "合同审阅",
+      "content": "Party A contact is Chen Yu, chen.yu@example.com, payment account 6222020202020202."
+    }
+  ],
+  "expected_outcomes": [
+    "默认阻断银行卡号等高风险财务标识。",
+    "在保留文档语义的前提下，对联系人信息和网络细节执行脱敏。"
+  ],
+  "applicability_notes": [
+    "适用于发票、报销、合同、采购备注和合规审查草稿。",
+    "适合需要比普通办公场景更严格处理财务实体的上下文。"
+  ],
+  "false_positive_notes": [
+    "较长的数字串在合成样例中可能被识别为银行卡号。",
+    "部分合同编号可能类似 token 或账号格式，因此会被保守处理。"
+  ]
+}

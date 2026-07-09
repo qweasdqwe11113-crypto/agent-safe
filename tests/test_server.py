@@ -146,6 +146,14 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(preview["suggested_action"], "block")
         self.assertIn("Sensitive File Name", preview["preview_text"])
 
+    def test_profiles_endpoint_returns_template_metadata(self) -> None:
+        status, payload = self.request_json("GET", "/profiles")
+        self.assertEqual(status, 200)
+        self.assertIn("coding", payload["profiles"])
+        coding_template = next(item for item in payload["templates"] if item["profile"] == "coding")
+        self.assertEqual(coding_template["title"], "代码场景隐私模板")
+        self.assertGreater(len(coding_template["sample_inputs"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

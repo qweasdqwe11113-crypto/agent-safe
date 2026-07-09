@@ -1,0 +1,29 @@
+{
+  "profile": "office",
+  "title": "办公与客服场景隐私模板",
+  "description": "在保留总结和支持任务所需上下文的同时，保护联系人信息、工单、会议纪要和办公文档。",
+  "block_categories": ["secret", "file"],
+  "mask_categories": ["pii", "network"],
+  "sample_inputs": [
+    {
+      "title": "客户联系人摘要",
+      "content": "Customer: Jane Doe, jane.doe@example.com, 13800138000, asks to reset billing password."
+    },
+    {
+      "title": "会议纪要",
+      "content": "Contact Liu Wei at wei.liu@company.com after the Shanghai office move."
+    }
+  ],
+  "expected_outcomes": [
+    "在保留工单语义的前提下，对姓名、邮箱、电话和地址进行脱敏。",
+    "对显式密钥、账号凭据或敏感配置文件上传执行阻断。"
+  ],
+  "applicability_notes": [
+    "适用于邮件、会议纪要、导出的表格文本、CRM 备注和客服工单。",
+    "适合需要保留业务上下文、同时避免泄露个人联系方式的任务。"
+  ],
+  "false_positive_notes": [
+    "姓名和地址检测有时会把类似人名的组织名称一起脱敏。",
+    "电话号码规则目前对中国大陆常见手机号格式最敏感。"
+  ]
+}

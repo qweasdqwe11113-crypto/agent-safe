@@ -77,6 +77,7 @@ summer_projection/
   model_client.py
   server.py
   codex_client.py
+  policies/
   outputs/
   examples/
   tests/
@@ -96,6 +97,9 @@ summer_projection/
 
 - [server.py](C:/Users/jiahjq/Desktop/summer_projection/server.py)
   当前主线 HTTP API 后端，后续 Web 前端直接接这里。
+
+- [policies/](C:/Users/jiahjq/Desktop/summer_projection/policies)
+  策略配置目录，当前提供 `coding`、`office`、`finance` 三类可读、可版本化的 JSON 策略文件。
 
 - [guard.py](C:/Users/jiahjq/Desktop/summer_projection/guard.py)
   早期单轮 CLI wrapper 原型，仍然保留用于演示单条消息流程。
@@ -438,6 +442,35 @@ python guard.py --stdin --profile coding
 - `Suggested Action: MASK`
 
 说明自由文本里的姓名、地址、证件号已经能被 HanLP 增强识别并脱敏。
+
+## 策略配置文件
+
+当前项目已经将场景策略从纯代码常量中抽离为可读、可版本化的 JSON 配置文件，位于：
+
+```text
+policies/
+  coding.json
+  office.json
+  finance.json
+```
+
+每个文件定义一个 profile，例如：
+
+```json
+{
+  "profile": "coding",
+  "block_categories": ["secret", "file"],
+  "mask_categories": ["pii", "network"]
+}
+```
+
+当前代码会在启动时从 `policies/` 目录加载这些配置，并用于：
+
+- CLI `--profile`
+- API session profile
+- `allow / mask / block` 决策
+
+这意味着现在不同场景模板不再只写死在 Python 代码里，而是可以通过独立策略文件管理和版本化。
 
 ## 当前已验证的能力
 

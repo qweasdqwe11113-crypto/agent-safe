@@ -1,0 +1,49 @@
+{
+  "profile": "coding",
+  "title": "代码场景隐私模板",
+  "description": "在开发环境内容离开本机之前，保护代码仓库、密钥、内部接口和调试产物。",
+  "block_categories": ["secret", "file"],
+  "mask_categories": ["pii", "network"],
+  "sample_inputs": [
+    {
+      "title": "Secret in dotenv",
+      "content": "OPENAI_API_KEY=sk-example1234567890abcdef1234567890"
+    },
+    {
+      "title": "包含内网接口的调试日志",
+      "content": "POST http://build.internal/api/deploy failed for alice@example.com"
+    }
+  ],
+  "expected_outcomes": [
+    "对原始密钥和 .env、私钥等敏感文件默认执行阻断。",
+    "在任务仍可继续的情况下，对邮箱、IP 和内部接口地址执行脱敏。"
+  ],
+  "applicability_notes": [
+    "适用于代码审查、调试分析、仓库总结和 Agent 辅助开发流程。",
+    "尤其适合 Agent 可能读取本地文件、diff、终端日志或错误堆栈的场景。"
+  ],
+  "false_positive_notes": [
+    "通用 token 规则有时会误命中较长的构建标识符或哈希串。",
+    "内部接口规则也可能命中文档里用于示例的 localhost 地址。"
+  ],
+  "sensitive_file_names": [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.development",
+    "id_rsa",
+    "id_dsa",
+    "credentials.json",
+    ".npmrc"
+  ],
+  "sensitive_directories": [
+    "node_modules",
+    ".git",
+    ".ssh",
+    ".aws",
+    ".kube",
+    ".config",
+    "secrets",
+    "private"
+  ]
+}

@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import string
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 PLUGIN_ROOT = PROJECT_ROOT / "codex-privacy-filter"
@@ -19,22 +21,7 @@ from core.vault import restore_string, save_token_map  # noqa: E402
 from ner_adapter import detect_entities  # noqa: E402
 
 
-PROFILE_POLICIES = {
-    "coding": {
-        "block_categories": {"secret", "file"},
-        "mask_categories": {"pii", "network"},
-    },
-    "office": {
-        "block_categories": {"secret", "file"},
-        "mask_categories": {"pii", "network"},
-    },
-    "finance": {
-        "block_categories": {"secret", "finance", "file"},
-        "mask_categories": {"pii", "network"},
-    },
-}
-
-LABEL_CATEGORIES = {
+DEFAULT_LABEL_CATEGORIES = {
     "SENSITIVE_SECRET": "secret",
     "AUTH_TOKEN": "secret",
     "OPENAI_KEY": "secret",
@@ -66,6 +53,8 @@ LABEL_CATEGORIES = {
     "IPV6_ADDRESS": "network",
 }
 
+PROFILE_POLICIES: dict[str, dict[str, set[str]]] = {}
+
 RISK_LEVELS = {
     "allow": "LOW",
     "mask": "MEDIUM",
@@ -83,7 +72,7 @@ class ScanResult:
     suggested_action: str
 
 
-SENSITIVE_FILE_NAMES = {
+DEFAULT_SENSITIVE_FILE_NAMES = {
     ".env",
     ".env.local",
     ".env.production",
@@ -94,7 +83,7 @@ SENSITIVE_FILE_NAMES = {
     ".npmrc",
 }
 
-SENSITIVE_DIRECTORIES = {
+DEFAULT_SENSITIVE_DIRECTORIES = {
     "node_modules",
     ".git",
     ".ssh",
@@ -105,7 +94,7 @@ SENSITIVE_DIRECTORIES = {
     "private",
 }
 
-BINARY_EXTENSIONS = {
+DEFAULT_BINARY_EXTENSIONS = {
     ".png",
     ".jpg",
     ".jpeg",
@@ -128,6 +117,39 @@ BINARY_EXTENSIONS = {
 }
 
 LARGE_FILE_THRESHOLD_BYTES = 1024 * 1024
+
+POLICY_DIR = PROJECT_ROOT / "policies"
+
+
+@dataclass(slots=True)
+class PolicyTemplate:
+    profile: str
+    block_categories: set[str]
+    mask_categories: set[str]
+    title: str
+    description: str
+    sample_inputs: list[dict[str, str]]
+    expected_outcomes: list[str]
+    applicability_notes: list[str]
+    false_positive_notes: list[str]
+    label_categories: dict[str, str]
+    sensitive_file_names: set[str]
+    sensitive_directories: set[str]
+    binary_extensions: set[str]
+    large_file_threshold_bytes: int
+
+    def to_summary_dict(self) -> dict[str, Any]:
+        return {
+            "profile": self.profile,
+            "title": self.title,
+            "description": self.description,
+            "block_categories": sorted(self.block_categories),
+            "mask_categories": sorted(self.mask_categories),
+            "sample_inputs": self.sample_inputs,
+            "expected_outcomes": self.expected_outcomes,
+            "applicability_notes": self.applicability_notes,
+            "false_positive_notes": self.false_positive_notes,
+        }
 
 
 def extract_label(token: str) -> str:
@@ -153,13 +175,103 @@ def suggest_action(labels: set[str], profile: str) -> str:
         return "allow"
 
     policy = PROFILE_POLICIES[profile]
-    categories = {LABEL_CATEGORIES.get(label, "unknown") for label in labels}
+    categories = {get_label_categories(profile).get(label, "unknown") for label in labels}
 
     if categories & policy["block_categories"]:
         return "block"
     if categories & policy["mask_categories"]:
         return "mask"
     return "allow"
+
+
+def load_profile_policies(policy_dir: Path | None = None) -> dict[str, dict[str, set[str]]]:
+    actual_policy_dir = policy_dir or POLICY_DIR
+    policies: dict[str, dict[str, set[str]]] = {}
+    if not actual_policy_dir.exists():
+        return policies
+
+    for policy_path in sorted(actual_policy_dir.glob("*.json")):
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+        profile = payload["profile"]
+        policies[profile] = {
+            "block_categories": set(payload.get("block_categories", [])),
+            "mask_categories": set(payload.get("mask_categories", [])),
+        }
+    return policies
+
+
+def _coerce_string_set(values: list[str] | None, defaults: set[str]) -> set[str]:
+    if not values:
+        return set(defaults)
+    return {value for value in values if isinstance(value, str) and value}
+
+
+def _coerce_string_list(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    return [value for value in values if isinstance(value, str) and value]
+
+
+def _coerce_sample_inputs(values: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    samples: list[dict[str, str]] = []
+    for item in values or []:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title")
+        content = item.get("content")
+        if isinstance(title, str) and isinstance(content, str):
+            samples.append({"title": title, "content": content})
+    return samples
+
+
+def load_policy_templates(policy_dir: Path | None = None) -> dict[str, PolicyTemplate]:
+    actual_policy_dir = policy_dir or POLICY_DIR
+    templates: dict[str, PolicyTemplate] = {}
+    if not actual_policy_dir.exists():
+        return templates
+
+    for policy_path in sorted(actual_policy_dir.glob("*.json")):
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+        profile = payload["profile"]
+        templates[profile] = PolicyTemplate(
+            profile=profile,
+            block_categories=set(payload.get("block_categories", [])),
+            mask_categories=set(payload.get("mask_categories", [])),
+            title=payload.get("title", profile.title()),
+            description=payload.get("description", ""),
+            sample_inputs=_coerce_sample_inputs(payload.get("sample_inputs")),
+            expected_outcomes=_coerce_string_list(payload.get("expected_outcomes")),
+            applicability_notes=_coerce_string_list(payload.get("applicability_notes")),
+            false_positive_notes=_coerce_string_list(payload.get("false_positive_notes")),
+            label_categories={
+                **DEFAULT_LABEL_CATEGORIES,
+                **{
+                    key: value
+                    for key, value in (payload.get("label_categories") or {}).items()
+                    if isinstance(key, str) and isinstance(value, str)
+                },
+            },
+            sensitive_file_names=_coerce_string_set(payload.get("sensitive_file_names"), DEFAULT_SENSITIVE_FILE_NAMES),
+            sensitive_directories=_coerce_string_set(
+                payload.get("sensitive_directories"),
+                DEFAULT_SENSITIVE_DIRECTORIES,
+            ),
+            binary_extensions=_coerce_string_set(payload.get("binary_extensions"), DEFAULT_BINARY_EXTENSIONS),
+            large_file_threshold_bytes=int(payload.get("large_file_threshold_bytes", LARGE_FILE_THRESHOLD_BYTES)),
+        )
+    return templates
+
+
+def get_policy_template(profile: str) -> PolicyTemplate:
+    return POLICY_TEMPLATES[profile]
+
+
+def get_policy_templates_summary() -> list[dict[str, Any]]:
+    return [template.to_summary_dict() for _, template in sorted(POLICY_TEMPLATES.items())]
+
+
+def get_label_categories(profile: str) -> dict[str, str]:
+    return get_policy_template(profile).label_categories
 
 
 def scan_text(text: str, profile: str) -> ScanResult:
@@ -185,7 +297,7 @@ def scan_file(path: Path, profile: str) -> ScanResult:
 
 def scan_file_bytes(file_name: str, payload: bytes, profile: str, path_hint: Path | None = None) -> ScanResult:
     effective_path = path_hint or Path(file_name)
-    original_text = build_file_display_text(effective_path, payload)
+    original_text = build_file_display_text(effective_path, payload, profile)
     redacted_text = original_text
     token_map: dict[str, str] = {}
 
@@ -195,7 +307,7 @@ def scan_file_bytes(file_name: str, payload: bytes, profile: str, path_hint: Pat
         redacted_text = text_scan.redacted_text
         token_map.update(text_scan.token_map)
 
-    add_file_tokens(effective_path, payload, token_map)
+    add_file_tokens(effective_path, payload, token_map, profile)
     labels = {extract_label(token) for token in token_map}
 
     return ScanResult(
@@ -208,33 +320,34 @@ def scan_file_bytes(file_name: str, payload: bytes, profile: str, path_hint: Pat
     )
 
 
-def build_file_display_text(path: Path, payload: bytes) -> str:
+def build_file_display_text(path: Path, payload: bytes, profile: str | None = None) -> str:
     size = len(payload)
-    if is_binary_payload(path, payload):
+    if is_binary_payload(path, payload, profile):
         return f"[Binary file omitted: {path.name} ({size} bytes)]"
     return payload.decode("utf-8", errors="replace")
 
 
-def add_file_tokens(path: Path, payload: bytes, token_map: dict[str, str]) -> None:
+def add_file_tokens(path: Path, payload: bytes, token_map: dict[str, str], profile: str) -> None:
+    template = get_policy_template(profile)
     normalized_name = path.name.lower()
-    if normalized_name in SENSITIVE_FILE_NAMES:
+    if normalized_name in {name.lower() for name in template.sensitive_file_names}:
         token = make_file_token("SENSITIVE_FILE_NAME", path.name)
         token_map[token] = path.name
 
     matched_directories = {
         part
         for part in path.parts
-        if part.lower() in SENSITIVE_DIRECTORIES
+        if part.lower() in {directory.lower() for directory in template.sensitive_directories}
     }
     for directory in matched_directories:
         token = make_file_token("SENSITIVE_DIRECTORY", directory)
         token_map[token] = directory
 
-    if is_binary_payload(path, payload):
+    if is_binary_payload(path, payload, profile):
         token = make_file_token("BINARY_FILE", path.name)
         token_map[token] = path.name
 
-    if len(payload) >= LARGE_FILE_THRESHOLD_BYTES:
+    if len(payload) >= template.large_file_threshold_bytes:
         token = make_file_token("LARGE_FILE", f"{path.name}:{len(payload)}")
         token_map[token] = f"{path.name} ({len(payload)} bytes)"
 
@@ -245,8 +358,12 @@ def make_file_token(label: str, value: str) -> str:
     return f"[{label}_{sha256(value.encode('utf-8')).hexdigest()[:6]}]"
 
 
-def is_binary_payload(path: Path, payload: bytes) -> bool:
-    if path.suffix.lower() in BINARY_EXTENSIONS:
+def is_binary_payload(path: Path, payload: bytes, profile: str | None = None) -> bool:
+    binary_extensions = DEFAULT_BINARY_EXTENSIONS
+    if profile and profile in POLICY_TEMPLATES:
+        binary_extensions = get_policy_template(profile).binary_extensions
+
+    if path.suffix.lower() in {extension.lower() for extension in binary_extensions}:
         return True
     if b"\x00" in payload:
         return True
@@ -365,3 +482,7 @@ def restore_response_file(output_path: Path, token_map: dict[str, str]) -> Path:
     restored_text = restore_response(output_path.read_text(encoding="utf-8"), token_map)
     restored_path.write_text(restored_text, encoding="utf-8")
     return restored_path
+
+
+PROFILE_POLICIES.update(load_profile_policies())
+POLICY_TEMPLATES = load_policy_templates()

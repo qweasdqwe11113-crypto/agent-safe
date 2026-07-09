@@ -13,7 +13,16 @@ from pathlib import Path
 from urllib.parse import urlparse
 from dataclasses import asdict
 
-from guard_core import PROFILE_POLICIES, RISK_LEVELS, apply_final_action, build_preview, restore_response, scan_file_bytes, scan_text
+from guard_core import (
+    PROFILE_POLICIES,
+    RISK_LEVELS,
+    apply_final_action,
+    build_preview,
+    get_policy_templates_summary,
+    restore_response,
+    scan_file_bytes,
+    scan_text,
+)
 from model_client import ModelClient, ModelClientError
 from session_state import SessionState, TurnRecord, append_turn, load_session, save_session_log
 
@@ -99,7 +108,13 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/profiles":
-            self._write_json(HTTPStatus.OK, {"profiles": sorted(PROFILE_POLICIES)})
+            self._write_json(
+                HTTPStatus.OK,
+                {
+                    "profiles": sorted(PROFILE_POLICIES),
+                    "templates": get_policy_templates_summary(),
+                },
+            )
             return
 
         if path.startswith("/sessions/"):
