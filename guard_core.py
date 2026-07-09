@@ -180,17 +180,22 @@ def scan_text(text: str, profile: str) -> ScanResult:
 
 def scan_file(path: Path, profile: str) -> ScanResult:
     payload = path.read_bytes()
-    original_text = build_file_display_text(path, payload)
+    return scan_file_bytes(path.name, payload, profile, path)
+
+
+def scan_file_bytes(file_name: str, payload: bytes, profile: str, path_hint: Path | None = None) -> ScanResult:
+    effective_path = path_hint or Path(file_name)
+    original_text = build_file_display_text(effective_path, payload)
     redacted_text = original_text
     token_map: dict[str, str] = {}
 
-    if not is_binary_payload(path, payload):
+    if not is_binary_payload(effective_path, payload):
         text_scan = scan_text(payload.decode("utf-8", errors="replace"), profile)
         original_text = text_scan.original_text
         redacted_text = text_scan.redacted_text
         token_map.update(text_scan.token_map)
 
-    add_file_tokens(path, payload, token_map)
+    add_file_tokens(effective_path, payload, token_map)
     labels = {extract_label(token) for token in token_map}
 
     return ScanResult(

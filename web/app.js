@@ -14,6 +14,7 @@ const elements = {
   sessionCard: document.getElementById("sessionCard"),
   previewForm: document.getElementById("previewForm"),
   messageInput: document.getElementById("messageInput"),
+  fileInput: document.getElementById("fileInput"),
   previewEmpty: document.getElementById("previewEmpty"),
   previewPanel: document.getElementById("previewPanel"),
   suggestedActionBadge: document.getElementById("suggestedActionBadge"),
@@ -32,11 +33,14 @@ const elements = {
 };
 
 async function requestJson(path, options = {}) {
+  const hasFormDataBody = options.body instanceof FormData;
   const response = await fetch(path, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
+    headers: hasFormDataBody
+      ? { ...(options.headers || {}) }
+      : {
+          "Content-Type": "application/json",
+          ...(options.headers || {}),
+        },
     ...options,
   });
 
@@ -268,20 +272,35 @@ elements.previewForm.addEventListener("submit", async (event) => {
   }
 
   const message = elements.messageInput.value.trim();
-  if (!message) {
-    showToast("Enter a message before preview.");
+  const file = elements.fileInput.files[0];
+  if (!message && !file) {
+    showToast("Enter a message or choose a file before preview.");
     return;
   }
 
   try {
-    const preview = await requestJson(`/sessions/${encodeURIComponent(state.session.session_id)}/preview`, {
-      method: "POST",
-      body: JSON.stringify({ message }),
-    });
+    let preview;
+    if (file) {
+      const formData = new FormData();
+      formData.append("file", file);
+      preview = await requestJson(`/sessions/${encodeURIComponent(state.session.session_id)}/preview-file`, {
+        method: "POST",
+        body: formData,
+      });
+    } else {
+      preview = await requestJson(`/sessions/${encodeURIComponent(state.session.session_id)}/preview`, {
+        method: "POST",
+        body: JSON.stringify({ message }),
+      });
+    }
 
     state.preview = preview;
     state.selectedAction = preview.suggested_action;
     elements.overrideReasonInput.value = "";
+    if (file) {
+      elements.messageInput.value = "";
+      elements.fileInput.value = "";
+    }
 
     renderPreview();
     showToast("Preview created");

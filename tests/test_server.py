@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -12,6 +13,8 @@ from server import GuardHTTPRequestHandler, GuardHTTPServer, SessionStore
 
 class ServerTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_ner_backend = os.environ.get("APG_NER_BACKEND")
+        os.environ["APG_NER_BACKEND"] = "heuristic"
         self.tmpdir = tempfile.TemporaryDirectory()
         self.session_store = SessionStore(Path(self.tmpdir.name))
         self.model_client = ModelClient(provider="mock", model="mock-gpt")
@@ -25,6 +28,10 @@ class ServerTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join(timeout=5)
         self.tmpdir.cleanup()
+        if self.original_ner_backend is None:
+            os.environ.pop("APG_NER_BACKEND", None)
+        else:
+            os.environ["APG_NER_BACKEND"] = self.original_ner_backend
 
     def request_json(self, method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
         data = None
@@ -33,6 +40,25 @@ class ServerTests(unittest.TestCase):
             data = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def request_multipart(self, path: str, field_name: str, filename: str, content: bytes) -> tuple[int, dict]:
+        boundary = "----CodexBoundary123456"
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
+            "Content-Type: application/octet-stream\r\n\r\n"
+        ).encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}{path}",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 return response.status, json.loads(response.read().decode("utf-8"))
@@ -105,6 +131,20 @@ class ServerTests(unittest.TestCase):
             body = response.read().decode("utf-8")
         self.assertIn("Agent Privacy Guard", body)
         self.assertIn("发送前治理控制台", body)
+
+    def test_preview_file_upload(self) -> None:
+        self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "file-session"})
+        status, preview = self.request_multipart(
+            "/sessions/file-session/preview-file",
+            "file",
+            ".env",
+            b"OPENAI_API_KEY=sk-abc123def456ghi789jkl012mno345\n",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(preview["input_kind"], "file")
+        self.assertEqual(preview["file_name"], ".env")
+        self.assertEqual(preview["suggested_action"], "block")
+        self.assertIn("Sensitive File Name", preview["preview_text"])
 
 
 if __name__ == "__main__":

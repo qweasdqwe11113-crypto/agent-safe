@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import uuid
+from email.parser import BytesParser
+from email.policy import default as email_default_policy
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from mimetypes import guess_type
@@ -11,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from dataclasses import asdict
 
-from guard_core import PROFILE_POLICIES, RISK_LEVELS, apply_final_action, build_preview, restore_response, scan_text
+from guard_core import PROFILE_POLICIES, RISK_LEVELS, apply_final_action, build_preview, restore_response, scan_file_bytes, scan_text
 from model_client import ModelClient, ModelClientError
 from session_state import SessionState, TurnRecord, append_turn, load_session, save_session_log
 
@@ -133,26 +135,43 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
-        payload = self._read_json_body()
-        if payload is None:
-            return
 
         if path == "/sessions":
+            payload = self._read_json_body()
+            if payload is None:
+                return
             self._handle_create_session(payload)
             return
 
         if path.startswith("/sessions/") and path.endswith("/preview"):
             session_id = path.split("/")[2]
+            payload = self._read_json_body()
+            if payload is None:
+                return
             self._handle_preview(session_id, payload)
+            return
+
+        if path.startswith("/sessions/") and path.endswith("/preview-file"):
+            session_id = path.split("/")[2]
+            payload = self._read_multipart_form_data()
+            if payload is None:
+                return
+            self._handle_preview_file(session_id, payload)
             return
 
         if path.startswith("/sessions/") and path.endswith("/messages"):
             session_id = path.split("/")[2]
+            payload = self._read_json_body()
+            if payload is None:
+                return
             self._handle_message(session_id, payload)
             return
 
         if path.startswith("/sessions/") and path.endswith("/confirm"):
             session_id = path.split("/")[2]
+            payload = self._read_json_body()
+            if payload is None:
+                return
             self._handle_confirm(session_id, payload)
             return
 
@@ -200,6 +219,55 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 "preview_id": preview_id,
                 "session_id": session_id,
                 "profile": session.profile,
+                "input_kind": "text",
+                **preview_payload,
+                "needs_confirmation": True,
+            },
+        )
+
+    def _handle_preview_file(self, session_id: str, payload: dict) -> None:
+        session = self.server.session_store.get_session(session_id)
+        if session is None:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "Session not found"})
+            return
+
+        file_payload = payload.get("file")
+        if not isinstance(file_payload, dict):
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "file upload is required"})
+            return
+
+        file_name = file_payload.get("filename") or "uploaded-file"
+        file_bytes = file_payload.get("content")
+        if not isinstance(file_bytes, bytes):
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "uploaded file content is invalid"})
+            return
+
+        scan_result = scan_file_bytes(file_name, file_bytes, session.profile)
+        action_options = build_action_options(scan_result)
+        preview_payload = {
+            "message": f"[file] {file_name}",
+            "profile": session.profile,
+            "original_text": scan_result.original_text,
+            "redacted_text": scan_result.redacted_text,
+            "token_map": scan_result.token_map,
+            "suggested_action": scan_result.suggested_action,
+            "risk_level": RISK_LEVELS[scan_result.suggested_action],
+            "suggested_sent_text": apply_final_action(scan_result, scan_result.suggested_action),
+            "action_options": action_options,
+            "preview_text": build_preview(scan_result),
+            "file_name": file_name,
+            "file_size": len(file_bytes),
+            "content_type": file_payload.get("content_type"),
+            "input_kind": "file",
+        }
+        preview_id = self.server.session_store.save_preview(session_id, preview_payload)
+        self._write_json(
+            HTTPStatus.OK,
+            {
+                "preview_id": preview_id,
+                "session_id": session_id,
+                "profile": session.profile,
+                "input_kind": "file",
                 **preview_payload,
                 "needs_confirmation": True,
             },
@@ -358,6 +426,43 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(payload, dict):
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Request body must be a JSON object"})
             return None
+        return payload
+
+    def _read_multipart_form_data(self) -> dict | None:
+        content_type = self.headers.get("Content-Type", "")
+        if "multipart/form-data" not in content_type:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Content-Type must be multipart/form-data"})
+            return None
+
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "Invalid Content-Length"})
+            return None
+
+        raw_body = self.rfile.read(content_length) if content_length > 0 else b""
+        message = BytesParser(policy=email_default_policy).parsebytes(
+            f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + raw_body
+        )
+        if not message.is_multipart():
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "multipart body is invalid"})
+            return None
+
+        payload: dict[str, object] = {}
+        for part in message.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            if not name:
+                continue
+            filename = part.get_filename()
+            content = part.get_payload(decode=True) or b""
+            if filename:
+                payload[name] = {
+                    "filename": filename,
+                    "content": content,
+                    "content_type": part.get_content_type(),
+                }
+            else:
+                payload[name] = content.decode(part.get_content_charset() or "utf-8", errors="replace")
         return payload
 
     def _write_json(self, status: HTTPStatus, payload: dict) -> None:
