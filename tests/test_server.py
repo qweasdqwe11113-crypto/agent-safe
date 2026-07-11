@@ -3,8 +3,8 @@ import os
 import tempfile
 import threading
 import unittest
-import urllib.request
 import urllib.error
+import urllib.request
 from pathlib import Path
 
 from model_client import ModelClient
@@ -72,28 +72,21 @@ class ServerTests(unittest.TestCase):
 
         status, preview = self.request_json("POST", "/sessions/demo-session/preview", {"message": "email=test@example.com"})
         self.assertEqual(status, 200)
-        self.assertIn("preview_id", preview)
         self.assertEqual(preview["suggested_action"], "mask")
         self.assertIn("[USER_EMAIL_", preview["redacted_text"])
-        self.assertTrue(preview["needs_confirmation"])
-        self.assertEqual(preview["action_options"]["allow"]["sent_text"], "email=test@example.com")
-        self.assertIn("[USER_EMAIL_", preview["action_options"]["mask"]["sent_text"])
-        self.assertIsNone(preview["action_options"]["block"]["sent_text"])
+        self.assertIn("[USER_EMAIL_", preview["suggested_sent_text"])
+        self.assertFalse(preview["blocked"])
 
         status, result = self.request_json(
             "POST",
-            "/sessions/demo-session/confirm",
-            {
-                "preview_id": preview["preview_id"],
-                "final_action": "mask",
-                "override_reason": "demo",
-            },
+            "/sessions/demo-session/messages",
+            {"message": "email=test@example.com"},
         )
         self.assertEqual(status, 200)
         self.assertFalse(result["blocked"])
         self.assertIn("[USER_EMAIL_", result["sent_text"])
         self.assertIn("[mock:coding]", result["assistant_reply"])
-        self.assertFalse(result["override"])
+        self.assertEqual(result["action"], "mask")
 
         status, session_payload = self.request_json("GET", "/sessions/demo-session")
         self.assertEqual(status, 200)
@@ -101,36 +94,29 @@ class ServerTests(unittest.TestCase):
 
     def test_blocked_message_does_not_call_model(self) -> None:
         self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "blocked-session"})
-        _, preview = self.request_json(
-            "POST",
-            "/sessions/blocked-session/preview",
-            {"message": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz"},
-        )
         status, result = self.request_json(
             "POST",
-            "/sessions/blocked-session/confirm",
-            {"preview_id": preview["preview_id"], "final_action": "block"},
+            "/sessions/blocked-session/messages",
+            {"message": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz"},
         )
         self.assertEqual(status, 200)
         self.assertTrue(result["blocked"])
-        self.assertEqual(result["final_action"], "block")
+        self.assertEqual(result["action"], "block")
 
-    def test_messages_endpoint_tells_client_to_use_preview_confirm(self) -> None:
+    def test_messages_endpoint_applies_the_policy_automatically(self) -> None:
         self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "flow-session"})
         status, result = self.request_json(
             "POST",
             "/sessions/flow-session/messages",
             {"message": "hello"},
         )
-        self.assertEqual(status, 400)
-        self.assertIn("Use /preview first", result["error"])
+        self.assertEqual(status, 200)
+        self.assertEqual(result["action"], "allow")
 
-    def test_root_serves_web_console(self) -> None:
-        request = urllib.request.Request(f"{self.base_url}/", method="GET")
-        with urllib.request.urlopen(request, timeout=10) as response:
-            body = response.read().decode("utf-8")
-        self.assertIn("Agent Privacy Guard", body)
-        self.assertIn("发送前治理控制台", body)
+    def test_root_is_not_exposed(self) -> None:
+        status, payload = self.request_json("GET", "/")
+        self.assertEqual(status, 404)
+        self.assertIn("Route not found", payload["error"])
 
     def test_preview_file_upload(self) -> None:
         self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "file-session"})

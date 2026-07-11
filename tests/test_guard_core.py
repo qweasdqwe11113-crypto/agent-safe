@@ -34,7 +34,7 @@ class GuardCorePolicyTests(unittest.TestCase):
             {"block_categories": {"secret"}, "mask_categories": {"pii", "network"}},
         )
 
-    def test_load_policy_templates_reads_metadata_and_runtime_overrides(self) -> None:
+    def test_load_policy_templates_reads_metadata_and_runtime_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             policy_path = Path(tmpdir) / "demo.json"
             policy_path.write_text(

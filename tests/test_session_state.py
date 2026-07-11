@@ -18,8 +18,6 @@ class SessionStateTests(unittest.TestCase):
                 user_original="email=test@example.com",
                 user_redacted="email=[USER_EMAIL_123abc]",
                 suggested_action="mask",
-                final_action="mask",
-                override_reason=None,
                 user_sent_text="email=[USER_EMAIL_123abc]",
                 codex_raw_reply="The placeholder is [USER_EMAIL_123abc].",
                 codex_restored_reply="The placeholder is test@example.com.",
@@ -51,11 +49,9 @@ class SessionStateTests(unittest.TestCase):
         self.assertIn("current safe message", prompt)
 
     @patch("session_guard.run_codex_turn")
-    @patch("session_guard.prompt_review_decision")
-    def test_session_turn_falls_back_to_stdout_when_raw_file_missing(self, mock_review, mock_run_codex) -> None:
+    def test_session_turn_falls_back_to_stdout_when_raw_file_missing(self, mock_run_codex) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             session = SessionState.create("coding", Path(tmpdir), "session-demo")
-            mock_review.return_value = ("allow", None)
             mock_run_codex.return_value = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
@@ -72,12 +68,9 @@ class SessionStateTests(unittest.TestCase):
             self.assertTrue((session.session_path / "turn-001-codex-raw.txt").exists())
 
     @patch("session_guard.run_codex_turn")
-    @patch("session_guard.prompt_review_decision")
-    def test_session_turn_falls_back_when_raw_file_is_empty(self, mock_review, mock_run_codex) -> None:
+    def test_session_turn_falls_back_when_raw_file_is_empty(self, mock_run_codex) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             session = SessionState.create("coding", Path(tmpdir), "session-demo")
-            mock_review.return_value = ("allow", None)
-
             def fake_run(*args, **kwargs):
                 raw_path = args[1]
                 raw_path.write_text("", encoding="utf-8")

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from codex_client import build_session_prompt, extract_assistant_reply, run_codex_turn
-from guard_core import PROFILE_POLICIES, RISK_LEVELS, apply_final_action, build_preview, restore_response, scan_text
+from guard_core import PROFILE_POLICIES, apply_final_action, build_preview, restore_response, scan_text
 from session_state import SessionState, TurnRecord, append_turn, save_session_log
 
 
@@ -34,28 +34,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def prompt_review_decision(suggested_action: str) -> tuple[str, str | None]:
-    while True:
-        print(
-            "\nReview Decision:\n"
-            f"- Press Enter to accept the suggested action ({suggested_action.upper()})\n"
-            "- Or type allow / mask / block to override it"
-        )
-        choice = input("> ").strip().lower()
-        if not choice:
-            return suggested_action, None
-        if choice in RISK_LEVELS:
-            if choice == suggested_action:
-                return suggested_action, None
-            reason = input("Override reason: ").strip()
-            return choice, reason or "No reason provided"
-        print("Invalid choice. Please enter allow, mask, block, or press Enter.")
-
-
 def run_session_turn(session_state: SessionState, user_input: str, codex_profile: str | None) -> TurnRecord | None:
     scan_result = scan_text(user_input, session_state.profile)
     print(build_preview(scan_result))
-    final_action, override_reason = prompt_review_decision(scan_result.suggested_action)
+    final_action = scan_result.suggested_action
 
     safe_text = apply_final_action(scan_result, final_action)
     if safe_text is None:
@@ -66,8 +48,6 @@ def run_session_turn(session_state: SessionState, user_input: str, codex_profile
             user_original=scan_result.original_text,
             user_redacted=scan_result.redacted_text,
             suggested_action=scan_result.suggested_action,
-            final_action=final_action,
-            override_reason=override_reason,
             user_sent_text="",
         )
         append_turn(session_state, turn_record)
@@ -111,8 +91,6 @@ def run_session_turn(session_state: SessionState, user_input: str, codex_profile
         user_original=scan_result.original_text,
         user_redacted=scan_result.redacted_text,
         suggested_action=scan_result.suggested_action,
-        final_action=final_action,
-        override_reason=override_reason,
         user_sent_text=safe_text,
         codex_raw_reply=raw_reply,
         codex_restored_reply=restored_reply,
@@ -158,7 +136,7 @@ def main() -> int:
                 print("No turns yet.")
             else:
                 for turn in session_state.turns:
-                    print(f"Turn {turn.turn_id}: {turn.final_action.upper()}")
+                    print(f"Turn {turn.turn_id}: {turn.suggested_action.upper()}")
             continue
 
         run_session_turn(session_state, user_input, args.codex_profile)

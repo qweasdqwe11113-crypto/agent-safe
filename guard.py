@@ -31,33 +31,18 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Policy profile used to decide allow, mask, or block.",
     )
-    parser.add_argument(
-        "--review",
-        action="store_true",
-        help="Show a review step and let the user choose the final action interactively.",
-    )
-    parser.add_argument("--out", help="Optional output file path used to save the final content selected by the wrapper.")
+    parser.add_argument("--out", help="Optional output file path used to save the policy-approved content.")
     parser.add_argument(
         "--codex",
         action="store_true",
-        help="After wrapper review, automatically call `codex exec` with the prepared content file.",
+        help="Automatically call `codex exec` with the policy-approved content file.",
     )
     parser.add_argument("--codex-profile", help="Optional Codex profile name passed to `codex exec --profile`.")
     parser.add_argument("--codex-output", help="Optional file path used to save the last message returned by `codex exec`.")
-    parser.add_argument(
-        "--override",
-        choices=("allow", "mask", "block"),
-        help="Optional final action chosen by the user to override the suggested action.",
-    )
-    parser.add_argument("--override-reason", help="Optional reason recorded when overriding the suggested action.")
     args = parser.parse_args()
 
     if args.stdin == bool(args.input):
         parser.error("Use exactly one input source: either <file> or --stdin.")
-    if args.override_reason and not args.override:
-        parser.error("--override-reason requires --override.")
-    if args.review and args.override:
-        parser.error("Use either --review or --override, not both.")
     if args.codex_output and not args.codex:
         parser.error("--codex-output requires --codex.")
     if args.codex_profile and not args.codex:
@@ -72,53 +57,6 @@ def read_input(args: argparse.Namespace) -> str:
     if args.stdin:
         return sys.stdin.read()
     return Path(args.input).read_text(encoding="utf-8")
-
-
-def open_review_input():
-    candidates = ["CONIN$"] if sys.platform.startswith("win") else ["/dev/tty"]
-    for path in candidates:
-        try:
-            return open(path, "r", encoding="utf-8")
-        except OSError:
-            continue
-    return None
-
-
-def prompt_review_decision(suggested_action: str) -> tuple[str, str | None]:
-    review_input = open_review_input()
-    if review_input is None:
-        raise RuntimeError("Interactive review is unavailable in this terminal. Use --override instead.")
-
-    try:
-        while True:
-            sys.stdout.write(
-                "\nReview Decision:\n"
-                f"- Press Enter to accept the suggested action ({suggested_action.upper()})\n"
-                "- Or type allow / mask / block to override it\n"
-                "> "
-            )
-            sys.stdout.flush()
-            choice = review_input.readline()
-            if not choice:
-                raise RuntimeError("Interactive review was cancelled before a decision was provided.")
-
-            choice = choice.strip().lower()
-            if not choice:
-                return suggested_action, None
-            if choice in RISK_LEVELS:
-                if choice == suggested_action:
-                    return suggested_action, None
-
-                sys.stdout.write("Override reason: ")
-                sys.stdout.flush()
-                reason = review_input.readline()
-                if not reason:
-                    raise RuntimeError("Override reason is required when changing the suggested action.")
-                return choice, reason.strip() or "No reason provided"
-
-            sys.stdout.write("Invalid choice. Please enter allow, mask, block, or press Enter.\n")
-    finally:
-        review_input.close()
 
 
 def build_codex_prompt(output_path: Path, final_action: str) -> str:
@@ -157,19 +95,8 @@ def main() -> int:
     else:
         scan_result = scan_file(Path(args.input), args.profile)
 
-    if args.review:
-        sys.stdout.write(build_preview(scan_result))
-        sys.stdout.write("\n")
-        final_action, override_reason = prompt_review_decision(scan_result.suggested_action)
-        sys.stdout.write(f"\nFinal Action: {final_action.upper()}\n")
-        if final_action != scan_result.suggested_action:
-            sys.stdout.write(f"Override: YES ({(override_reason or 'No reason provided').strip()})\n")
-        else:
-            sys.stdout.write("Override: NO\n")
-    else:
-        final_action = args.override or scan_result.suggested_action
-        override_reason = args.override_reason
-        sys.stdout.write(build_report(scan_result, final_action, override_reason))
+    final_action = scan_result.suggested_action
+    sys.stdout.write(build_report(scan_result, final_action))
 
     output_path = Path(args.out) if args.out else None
     wrote_output = False

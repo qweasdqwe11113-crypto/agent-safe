@@ -13,8 +13,6 @@ class TurnRecord:
     user_original: str
     user_redacted: str
     suggested_action: str
-    final_action: str
-    override_reason: str | None
     user_sent_text: str
     codex_raw_reply: str = ""
     codex_restored_reply: str = ""
@@ -71,7 +69,10 @@ class SessionState:
 
     @classmethod
     def from_dict(cls, payload: dict) -> "SessionState":
-        turns = [TurnRecord(**turn_payload) for turn_payload in payload.get("turns", [])]
+        turns = []
+        for turn_payload in payload.get("turns", []):
+            current_fields = TurnRecord.__dataclass_fields__
+            turns.append(TurnRecord(**{key: value for key, value in turn_payload.items() if key in current_fields}))
         return cls(
             session_id=payload["session_id"],
             profile=payload["profile"],

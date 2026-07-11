@@ -8,7 +8,6 @@ from email.parser import BytesParser
 from email.policy import default as email_default_policy
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from mimetypes import guess_type
 from pathlib import Path
 from urllib.parse import urlparse
 from dataclasses import asdict
@@ -99,10 +98,6 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
-        if path == "/" or self.server.has_static_file(path):
-            self._serve_static(path)
-            return
-
         if path == "/health":
             self._write_json(HTTPStatus.OK, {"status": "ok"})
             return
@@ -132,21 +127,6 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         self._write_json(HTTPStatus.NOT_FOUND, {"error": "Route not found"})
-
-    def _serve_static(self, path: str) -> None:
-        static_file = self.server.resolve_static_path(path)
-        if static_file is None or not static_file.exists() or not static_file.is_file():
-            self._write_json(HTTPStatus.NOT_FOUND, {"error": "Static file not found"})
-            return
-
-        content_type = guess_type(static_file.name)[0] or "application/octet-stream"
-        body = static_file.read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
@@ -213,7 +193,6 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         scan_result = scan_text(message, session.profile)
-        action_options = build_action_options(scan_result)
         preview_payload = {
             "message": message,
             "profile": session.profile,
@@ -223,7 +202,6 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             "suggested_action": scan_result.suggested_action,
             "risk_level": RISK_LEVELS[scan_result.suggested_action],
             "suggested_sent_text": apply_final_action(scan_result, scan_result.suggested_action),
-            "action_options": action_options,
             "preview_text": build_preview(scan_result),
         }
         preview_id = self.server.session_store.save_preview(session_id, preview_payload)
@@ -236,7 +214,7 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 "profile": session.profile,
                 "input_kind": "text",
                 **preview_payload,
-                "needs_confirmation": True,
+                "blocked": preview_payload["suggested_sent_text"] is None,
             },
         )
 
@@ -258,7 +236,6 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         scan_result = scan_file_bytes(file_name, file_bytes, session.profile)
-        action_options = build_action_options(scan_result)
         preview_payload = {
             "message": f"[file] {file_name}",
             "profile": session.profile,
@@ -268,7 +245,6 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             "suggested_action": scan_result.suggested_action,
             "risk_level": RISK_LEVELS[scan_result.suggested_action],
             "suggested_sent_text": apply_final_action(scan_result, scan_result.suggested_action),
-            "action_options": action_options,
             "preview_text": build_preview(scan_result),
             "file_name": file_name,
             "file_size": len(file_bytes),
@@ -284,17 +260,35 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 "profile": session.profile,
                 "input_kind": "file",
                 **preview_payload,
-                "needs_confirmation": True,
+                "blocked": preview_payload["suggested_sent_text"] is None,
             },
         )
 
     def _handle_message(self, session_id: str, payload: dict) -> None:
-        self._write_json(
-            HTTPStatus.BAD_REQUEST,
-            {
-                "error": "Use /preview first, then /confirm with preview_id and final_action.",
-            },
-        )
+        session = self.server.session_store.get_session(session_id)
+        if session is None:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "Session not found"})
+            return
+
+        message = payload.get("message", "")
+        if not isinstance(message, str) or not message.strip():
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "message must be a non-empty string"})
+            return
+
+        scan_result = scan_text(message, session.profile)
+        preview_payload = {
+            "message": message,
+            "profile": session.profile,
+            "original_text": scan_result.original_text,
+            "redacted_text": scan_result.redacted_text,
+            "token_map": scan_result.token_map,
+            "suggested_action": scan_result.suggested_action,
+            "risk_level": RISK_LEVELS[scan_result.suggested_action],
+            "suggested_sent_text": apply_final_action(scan_result, scan_result.suggested_action),
+            "preview_text": build_preview(scan_result),
+        }
+        preview_id = self.server.session_store.save_preview(session_id, preview_payload)
+        self._handle_confirm(session_id, {"preview_id": preview_id})
 
     def _handle_confirm(self, session_id: str, payload: dict) -> None:
         session = self.server.session_store.get_session(session_id)
@@ -314,13 +308,8 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": "preview_id does not belong to this session"})
             return
 
-        final_action = payload.get("final_action") or preview_payload["suggested_action"]
-        if final_action not in RISK_LEVELS:
-            self._write_json(HTTPStatus.BAD_REQUEST, {"error": f"Invalid final_action: {final_action}"})
-            return
-        override_reason = payload.get("override_reason")
-
-        safe_text = preview_payload["action_options"][final_action]["sent_text"]
+        final_action = preview_payload["suggested_action"]
+        safe_text = preview_payload["suggested_sent_text"]
         turn_id = session.next_turn_id()
         files = build_turn_file_paths(session, turn_id)
         files["user_original"].write_text(preview_payload["original_text"], encoding="utf-8")
@@ -338,8 +327,6 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 user_original=preview_payload["original_text"],
                 user_redacted=preview_payload["redacted_text"],
                 suggested_action=preview_payload["suggested_action"],
-                final_action=final_action,
-                override_reason=override_reason,
                 user_sent_text="",
                 artifacts={
                     "user_original": str(files["user_original"]),
@@ -352,10 +339,8 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 {
                     "session_id": session_id,
                     "turn_id": turn_id,
-                    "final_action": final_action,
+                    "action": final_action,
                     "blocked": True,
-                    "override": final_action != preview_payload["suggested_action"],
-                    "override_reason": override_reason,
                     "preview_id": preview_id,
                     "preview_text": preview_payload["preview_text"],
                 },
@@ -387,8 +372,6 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             user_original=preview_payload["original_text"],
             user_redacted=preview_payload["redacted_text"],
             suggested_action=preview_payload["suggested_action"],
-            final_action=final_action,
-            override_reason=override_reason,
             user_sent_text=safe_text,
             codex_raw_reply=model_response.reply_text,
             codex_restored_reply=restored_reply,
@@ -412,9 +395,7 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 "turn_id": turn_id,
                 "profile": session.profile,
                 "suggested_action": preview_payload["suggested_action"],
-                "final_action": final_action,
-                "override": final_action != preview_payload["suggested_action"],
-                "override_reason": override_reason,
+                "action": final_action,
                 "original_text": preview_payload["original_text"],
                 "redacted_text": preview_payload["redacted_text"],
                 "sent_text": safe_text,
@@ -496,25 +477,10 @@ class GuardHTTPServer(ThreadingHTTPServer):
         RequestHandlerClass,
         session_store: SessionStore,
         model_client: ModelClient,
-        web_root: Path | None = None,
     ):
         super().__init__(server_address, RequestHandlerClass)
         self.session_store = session_store
         self.model_client = model_client
-        self.web_root = (web_root or Path(__file__).resolve().parent / "web").resolve()
-
-    def has_static_file(self, request_path: str) -> bool:
-        candidate = self.resolve_static_path(request_path)
-        return candidate is not None and candidate.exists() and candidate.is_file()
-
-    def resolve_static_path(self, request_path: str) -> Path | None:
-        relative_path = "index.html" if request_path == "/" else request_path.lstrip("/")
-        candidate = (self.web_root / relative_path).resolve()
-        try:
-            candidate.relative_to(self.web_root)
-        except ValueError:
-            return None
-        return candidate
 
 
 def parse_args() -> argparse.Namespace:

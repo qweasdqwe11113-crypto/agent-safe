@@ -423,14 +423,9 @@ def build_preview(scan_result: ScanResult) -> str:
     return "\n".join(sections)
 
 
-def build_report(scan_result: ScanResult, final_action: str, override_reason: str | None) -> str:
+def build_report(scan_result: ScanResult, final_action: str) -> str:
     sections = [build_preview(scan_result)]
     sections.extend(["", f"Final Action: {final_action.upper()}"])
-
-    if final_action != scan_result.suggested_action:
-        sections.append(f"Override: YES ({(override_reason or 'No reason provided').strip()})")
-    else:
-        sections.append("Override: NO")
     return "\n".join(sections)
 
 

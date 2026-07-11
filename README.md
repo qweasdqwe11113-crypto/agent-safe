@@ -26,7 +26,7 @@
 1. 敏感内容扫描
 2. 发送前预览
 3. 脱敏或阻断
-4. 用户确认或 override
+4. 按策略自动脱敏或阻断
 5. 会话审计
 
 这种做法符合课程项目里允许的：
@@ -181,8 +181,7 @@ Model provider: rightcode (gpt-5.4)
 
 1. 创建会话
 2. 调用 `/preview` 看原文、脱敏文和三种动作的结果
-3. 用户决定是否 override
-4. 调用 `/confirm` 真正发送给模型
+3. 调用 `/messages`，系统按策略自动发送、脱敏或阻断
 
 ### 1. 创建会话
 
@@ -233,24 +232,6 @@ Invoke-RestMethod -Method Post `
   -Body '{"preview_id":"上一步返回的preview_id","final_action":"mask"}'
 ```
 
-例如 override 成 `allow`：
-
-```powershell
-Invoke-RestMethod -Method Post `
-  -Uri "http://127.0.0.1:8000/sessions/demo-session/confirm" `
-  -ContentType "application/json" `
-  -Body '{"preview_id":"上一步返回的preview_id","final_action":"allow","override_reason":"demo allow override"}'
-```
-
-例如直接阻断：
-
-```powershell
-Invoke-RestMethod -Method Post `
-  -Uri "http://127.0.0.1:8000/sessions/demo-session/confirm" `
-  -ContentType "application/json" `
-  -Body '{"preview_id":"上一步返回的preview_id","final_action":"block","override_reason":"too sensitive"}'
-```
-
 只有这一步才会真正：
 
 - 写入 turn
@@ -273,12 +254,7 @@ Invoke-RestMethod -Method Get `
 
 ### 6. 说明
 
-旧的 `/messages` 直发流程已经不再推荐使用。当前主线是：
-
-- `/preview`
-- `/confirm`
-
-这样更符合“先看改成什么样，再决定是否 override”的产品逻辑。
+当前主线是 `/messages` 自动执行策略；`/preview` 只用于展示和演示。
 
 ## 输出产物
 
@@ -338,7 +314,7 @@ python session_guard.py --profile coding
 它们主要用于：
 
 - 保留开发演进过程
-- 演示单条消息 preview / override
+- 演示单条消息 preview / 自动策略执行
 - 对比“CLI 原型”和“API 会话后端”两条路线
 
 ## 测试
@@ -346,7 +322,7 @@ python session_guard.py --profile coding
 运行测试：
 
 ```powershell
-python -m unittest tests.test_model_client tests.test_server tests.test_session_state tests.test_guard tests.test_guard_override tests.test_guard_codex tests.test_redact
+python -m unittest tests.test_model_client tests.test_server tests.test_session_state tests.test_guard tests.test_guard_codex tests.test_redact
 ```
 
 ## HanLP 增强中文 PII 检测
