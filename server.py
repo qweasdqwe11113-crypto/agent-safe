@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import os
+import time
+import urllib.error
+import urllib.request
 import uuid
 from email.parser import BytesParser
 from email.policy import default as email_default_policy
@@ -11,10 +16,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 from dataclasses import asdict
+from typing import Any
 
 from guard_core import (
     PROFILE_POLICIES,
     RISK_LEVELS,
+    ScanResult,
     apply_final_action,
     build_preview,
     get_policy_templates_summary,
@@ -57,6 +64,474 @@ class SessionStore:
 
     def pop_preview(self, preview_id: str) -> dict | None:
         return self.pending_previews.pop(preview_id, None)
+
+
+class GatewayClientError(RuntimeError):
+    pass
+
+
+class GatewayHTTPError(GatewayClientError):
+    def __init__(self, status_code: int, headers: dict[str, str], payload: dict) -> None:
+        super().__init__(f"Upstream HTTP error {status_code}")
+        self.status_code = status_code
+        self.headers = headers
+        self.payload = payload
+
+
+class GatewayClient:
+    def __init__(self, base_url: str | None, timeout_seconds: int = 60, api_key: str | None = None) -> None:
+        self.base_url = base_url.rstrip("/") if base_url else None
+        self.timeout_seconds = timeout_seconds
+        self.api_key = api_key
+
+    @classmethod
+    def from_env(cls) -> "GatewayClient":
+        return cls(
+            base_url=os.environ.get("APG_UPSTREAM_BASE_URL"),
+            timeout_seconds=int(os.environ.get("APG_UPSTREAM_TIMEOUT_SECONDS", "60")),
+            api_key=os.environ.get("APG_UPSTREAM_API_KEY"),
+        )
+
+    def forward_json(self, route_path: str, payload: dict, request_headers: dict[str, str]) -> tuple[int, dict[str, str], dict]:
+        if not self.base_url:
+            raise GatewayClientError("APG_UPSTREAM_BASE_URL is required for gateway routes.")
+
+        endpoint = f"{self.base_url}{route_path}"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        auth_header = request_headers.get("Authorization")
+        if auth_header:
+            headers["Authorization"] = auth_header
+        elif self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        for header_name in ("OpenAI-Beta", "OpenAI-Organization", "OpenAI-Project"):
+            value = request_headers.get(header_name)
+            if value:
+                headers[header_name] = value
+
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                raw_body = response.read().decode("utf-8")
+                payload = json.loads(raw_body) if raw_body.strip() else {}
+                response_headers = {key: value for key, value in response.headers.items()}
+                return response.status, response_headers, payload
+        except urllib.error.HTTPError as exc:
+            detail_text = exc.read().decode("utf-8", errors="replace")
+            try:
+                detail_payload = json.loads(detail_text)
+            except json.JSONDecodeError:
+                detail_payload = {"error": {"message": detail_text}}
+            response_headers = {key: value for key, value in exc.headers.items()}
+            return exc.code, response_headers, detail_payload
+        except urllib.error.URLError as exc:
+            raise GatewayClientError(f"Upstream connection failed: {exc}") from exc
+
+    def open_stream(self, route_path: str, payload: dict, request_headers: dict[str, str]):
+        if not self.base_url:
+            raise GatewayClientError("APG_UPSTREAM_BASE_URL is required for gateway routes.")
+
+        endpoint = f"{self.base_url}{route_path}"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        auth_header = request_headers.get("Authorization")
+        if auth_header:
+            headers["Authorization"] = auth_header
+        elif self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        for header_name in ("OpenAI-Beta", "OpenAI-Organization", "OpenAI-Project"):
+            value = request_headers.get(header_name)
+            if value:
+                headers[header_name] = value
+
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            return urllib.request.urlopen(request, timeout=self.timeout_seconds)
+        except urllib.error.HTTPError as exc:
+            detail_text = exc.read().decode("utf-8", errors="replace")
+            try:
+                detail_payload = json.loads(detail_text)
+            except json.JSONDecodeError:
+                detail_payload = {"error": {"message": detail_text}}
+            response_headers = {key: value for key, value in exc.headers.items()}
+            raise GatewayHTTPError(exc.code, response_headers, detail_payload) from exc
+        except urllib.error.URLError as exc:
+            raise GatewayClientError(f"Upstream connection failed: {exc}") from exc
+
+
+def _merge_token_maps(target: dict[str, str], incoming: dict[str, str]) -> None:
+    for key, value in incoming.items():
+        existing = target.get(key)
+        if existing is not None and existing != value:
+            raise GatewayClientError(f"Token collision detected for placeholder {key}.")
+        target[key] = value
+
+
+def _combine_actions(results: list[ScanResult]) -> str:
+    actions = {result.suggested_action for result in results}
+    if "block" in actions:
+        return "block"
+    if "mask" in actions:
+        return "mask"
+    return "allow"
+
+
+def _combine_gateway_actions(results: list[ScanResult]) -> str:
+    actions = {result.suggested_action for result in results}
+    if actions & {"block", "mask"}:
+        return "mask"
+    return "allow"
+
+
+def _scan_string(
+    text: str,
+    profile: str,
+    results: list[ScanResult],
+    token_map: dict[str, str],
+    *,
+    block_as_mask: bool = False,
+) -> str:
+    scan_result = scan_text(text, profile)
+    results.append(scan_result)
+    _merge_token_maps(token_map, scan_result.token_map)
+    if block_as_mask and scan_result.suggested_action == "block":
+        return scan_result.redacted_text
+    return apply_final_action(scan_result, scan_result.suggested_action) or ""
+
+
+def _sanitize_message_content(
+    content: Any,
+    profile: str,
+    results: list[ScanResult],
+    token_map: dict[str, str],
+    *,
+    block_as_mask: bool = False,
+) -> Any:
+    if isinstance(content, str):
+        return _scan_string(content, profile, results, token_map, block_as_mask=block_as_mask)
+    if isinstance(content, list):
+        sanitized_items: list[Any] = []
+        for item in content:
+            if not isinstance(item, dict):
+                sanitized_items.append(item)
+                continue
+            sanitized_item = copy.deepcopy(item)
+            if isinstance(sanitized_item.get("text"), str):
+                sanitized_item["text"] = _scan_string(
+                    sanitized_item["text"],
+                    profile,
+                    results,
+                    token_map,
+                    block_as_mask=block_as_mask,
+                )
+            sanitized_items.append(sanitized_item)
+        return sanitized_items
+    return content
+
+
+def sanitize_responses_payload(payload: dict, profile: str) -> tuple[dict, dict[str, str], str]:
+    sanitized = copy.deepcopy(payload)
+    results: list[ScanResult] = []
+    token_map: dict[str, str] = {}
+
+    if isinstance(sanitized.get("instructions"), str):
+        sanitized["instructions"] = _scan_string(
+            sanitized["instructions"],
+            profile,
+            results,
+            token_map,
+            block_as_mask=True,
+        )
+
+    input_value = sanitized.get("input")
+    if isinstance(input_value, str):
+        sanitized["input"] = _scan_string(input_value, profile, results, token_map, block_as_mask=True)
+    elif isinstance(input_value, dict):
+        content = input_value.get("content")
+        if content is not None:
+            input_value["content"] = _sanitize_message_content(
+                content,
+                profile,
+                results,
+                token_map,
+                block_as_mask=True,
+            )
+    elif isinstance(input_value, list):
+        sanitized_items: list[Any] = []
+        for item in input_value:
+            if not isinstance(item, dict):
+                sanitized_items.append(item)
+                continue
+            sanitized_item = copy.deepcopy(item)
+            if "content" in sanitized_item:
+                sanitized_item["content"] = _sanitize_message_content(
+                    sanitized_item.get("content"),
+                    profile,
+                    results,
+                    token_map,
+                    block_as_mask=True,
+                )
+            sanitized_items.append(sanitized_item)
+        sanitized["input"] = sanitized_items
+
+    return sanitized, token_map, _combine_gateway_actions(results) if results else "allow"
+
+
+def sanitize_chat_completions_payload(payload: dict, profile: str) -> tuple[dict, dict[str, str], str]:
+    sanitized = copy.deepcopy(payload)
+    results: list[ScanResult] = []
+    token_map: dict[str, str] = {}
+
+    messages = sanitized.get("messages")
+    if isinstance(messages, list):
+        sanitized_messages: list[Any] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                sanitized_messages.append(message)
+                continue
+            sanitized_message = copy.deepcopy(message)
+            if "content" in sanitized_message:
+                sanitized_message["content"] = _sanitize_message_content(
+                    sanitized_message.get("content"),
+                    profile,
+                    results,
+                    token_map,
+                    block_as_mask=True,
+                )
+            sanitized_messages.append(sanitized_message)
+        sanitized["messages"] = sanitized_messages
+
+    return sanitized, token_map, _combine_gateway_actions(results) if results else "allow"
+
+
+def restore_responses_payload(payload: dict, token_map: dict[str, str]) -> dict:
+    if not token_map:
+        return payload
+
+    restored = copy.deepcopy(payload)
+    if isinstance(restored.get("output_text"), str):
+        restored["output_text"] = restore_response(restored["output_text"], token_map)
+
+    output = restored.get("output")
+    if isinstance(output, list):
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    part["text"] = restore_response(part["text"], token_map)
+    return restored
+
+
+def restore_chat_completions_payload(payload: dict, token_map: dict[str, str]) -> dict:
+    if not token_map:
+        return payload
+
+    restored = copy.deepcopy(payload)
+    choices = restored.get("choices")
+    if not isinstance(choices, list):
+        return restored
+
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = restore_response(content, token_map)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    part["text"] = restore_response(part["text"], token_map)
+    return restored
+
+
+def restore_json_strings(value: Any, token_map: dict[str, str]) -> Any:
+    if not token_map:
+        return value
+    if isinstance(value, str):
+        return restore_response(value, token_map)
+    if isinstance(value, list):
+        return [restore_json_strings(item, token_map) for item in value]
+    if isinstance(value, dict):
+        return {key: restore_json_strings(item, token_map) for key, item in value.items()}
+    return value
+
+
+def create_streaming_token_restorer(token_map: dict[str, str]):
+    if not token_map:
+        def passthrough(field_key: str, text: str, flush: bool = False) -> str:
+            return text
+
+        return passthrough
+
+    max_token_len = max((len(token) for token in token_map), default=0)
+    buffers: dict[str, str] = {}
+
+    def rehydrate_text(text: str) -> str:
+        for token, original in token_map.items():
+            text = text.replace(token, original)
+        return text
+
+    def restore(field_key: str, text: str, flush: bool = False) -> str:
+        current = buffers.get(field_key, "") + text
+        if flush:
+            buffers[field_key] = ""
+            return rehydrate_text(current)
+
+        hold_back = 0
+        if max_token_len > 0:
+            for token in token_map:
+                max_prefix = min(len(token) - 1, len(current))
+                for prefix_len in range(1, max_prefix + 1):
+                    if current.endswith(token[:prefix_len]):
+                        hold_back = max(hold_back, prefix_len)
+
+        safe_end = len(current) - hold_back
+        safe_text = current[:safe_end]
+        buffers[field_key] = current[safe_end:]
+        return rehydrate_text(safe_text)
+
+    return restore
+
+
+def build_blocked_responses_payload(model: str | None) -> dict:
+    timestamp = int(time.time())
+    return {
+        "id": f"resp_{uuid.uuid4().hex}",
+        "object": "response",
+        "created_at": timestamp,
+        "status": "completed",
+        "model": model or "apg-blocked",
+        "output": [
+            {
+                "id": f"msg_{uuid.uuid4().hex}",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Request blocked by Agent Privacy Guard policy.",
+                    }
+                ],
+            }
+        ],
+        "output_text": "Request blocked by Agent Privacy Guard policy.",
+    }
+
+
+def build_blocked_responses_stream_events(model: str | None) -> list[dict]:
+    timestamp = int(time.time())
+    response_id = f"resp_{uuid.uuid4().hex}"
+    message_id = f"msg_{uuid.uuid4().hex}"
+    response = {
+        "id": response_id,
+        "object": "response",
+        "created_at": timestamp,
+        "status": "in_progress",
+        "model": model or "apg-blocked",
+        "output": [],
+    }
+    completed_response = {
+        **response,
+        "status": "completed",
+        "output": [
+            {
+                "id": message_id,
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Request blocked by Agent Privacy Guard policy.",
+                    }
+                ],
+            }
+        ],
+        "output_text": "Request blocked by Agent Privacy Guard policy.",
+    }
+    return [
+        {
+            "type": "response.created",
+            "response": response,
+        },
+        {
+            "type": "response.output_item.added",
+            "response_id": response_id,
+            "output_index": 0,
+            "item": {
+                "id": message_id,
+                "type": "message",
+                "role": "assistant",
+                "status": "in_progress",
+                "content": [],
+            },
+        },
+        {
+            "type": "response.output_text.delta",
+            "response_id": response_id,
+            "item_id": message_id,
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Request blocked by Agent Privacy Guard policy.",
+        },
+        {
+            "type": "response.output_text.done",
+            "response_id": response_id,
+            "item_id": message_id,
+            "output_index": 0,
+            "content_index": 0,
+            "text": "Request blocked by Agent Privacy Guard policy.",
+        },
+        {
+            "type": "response.completed",
+            "response": completed_response,
+        },
+    ]
+
+
+def build_blocked_chat_completions_payload(model: str | None) -> dict:
+    timestamp = int(time.time())
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
+        "object": "chat.completion",
+        "created": timestamp,
+        "model": model or "apg-blocked",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Request blocked by Agent Privacy Guard policy.",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+    }
 
 
 def build_action_options(scan_result) -> dict:
@@ -131,6 +606,20 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        if path == "/v1/responses":
+            payload = self._read_json_body()
+            if payload is None:
+                return
+            self._handle_gateway_responses(payload)
+            return
+
+        if path == "/v1/chat/completions":
+            payload = self._read_json_body()
+            if payload is None:
+                return
+            self._handle_gateway_chat_completions(payload)
+            return
+
         if path == "/sessions":
             payload = self._read_json_body()
             if payload is None:
@@ -171,6 +660,121 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         self._write_json(HTTPStatus.NOT_FOUND, {"error": "Route not found"})
+
+    def _handle_gateway_responses(self, payload: dict) -> None:
+        if payload.get("stream") is True:
+            self._handle_gateway_responses_stream(payload)
+            return
+
+        profile = self.server.gateway_profile
+        sanitized_payload, token_map, action = sanitize_responses_payload(payload, profile)
+        if action == "block":
+            self._write_json(
+                HTTPStatus.OK,
+                build_blocked_responses_payload(payload.get("model")),
+                extra_headers={"X-APG-Action": "block"},
+            )
+            return
+
+        try:
+            status, upstream_headers, upstream_payload = self.server.gateway_client.forward_json(
+                "/responses",
+                sanitized_payload,
+                self._request_headers_dict(),
+            )
+        except GatewayClientError as exc:
+            self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
+            return
+
+        restored_payload = restore_responses_payload(upstream_payload, token_map)
+        self._write_json(
+            HTTPStatus(status),
+            restored_payload,
+            extra_headers={"X-APG-Action": action, **self._filtered_response_headers(upstream_headers)},
+        )
+
+    def _handle_gateway_chat_completions(self, payload: dict) -> None:
+        if payload.get("stream") is True:
+            self._handle_gateway_chat_completions_stream(payload)
+            return
+
+        profile = self.server.gateway_profile
+        sanitized_payload, token_map, action = sanitize_chat_completions_payload(payload, profile)
+        if action == "block":
+            self._write_json(
+                HTTPStatus.OK,
+                build_blocked_chat_completions_payload(payload.get("model")),
+                extra_headers={"X-APG-Action": "block"},
+            )
+            return
+
+        try:
+            status, upstream_headers, upstream_payload = self.server.gateway_client.forward_json(
+                "/chat/completions",
+                sanitized_payload,
+                self._request_headers_dict(),
+            )
+        except GatewayClientError as exc:
+            self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
+            return
+
+        restored_payload = restore_chat_completions_payload(upstream_payload, token_map)
+        self._write_json(
+            HTTPStatus(status),
+            restored_payload,
+            extra_headers={"X-APG-Action": action, **self._filtered_response_headers(upstream_headers)},
+        )
+
+    def _handle_gateway_responses_stream(self, payload: dict) -> None:
+        profile = self.server.gateway_profile
+        sanitized_payload, token_map, action = sanitize_responses_payload(payload, profile)
+        if action == "block":
+            self._start_sse_response(HTTPStatus.OK, {"X-APG-Action": "block"})
+            for event in build_blocked_responses_stream_events(payload.get("model")):
+                self._write_sse_data(json.dumps(event, ensure_ascii=False))
+            self._write_sse_done()
+            return
+
+        try:
+            with self.server.gateway_client.open_stream(
+                "/responses",
+                sanitized_payload,
+                self._request_headers_dict(),
+            ) as upstream_response:
+                self._start_sse_response(
+                    HTTPStatus(upstream_response.status),
+                    {"X-APG-Action": action, **self._filtered_response_headers(dict(upstream_response.headers.items()))},
+                )
+                self._proxy_responses_sse(upstream_response, token_map)
+        except GatewayHTTPError as exc:
+            self._write_json(HTTPStatus(exc.status_code), exc.payload)
+        except GatewayClientError as exc:
+            self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
+
+    def _handle_gateway_chat_completions_stream(self, payload: dict) -> None:
+        profile = self.server.gateway_profile
+        sanitized_payload, token_map, action = sanitize_chat_completions_payload(payload, profile)
+        if action == "block":
+            self._start_sse_response(HTTPStatus.OK, {"X-APG-Action": "block"})
+            self._write_sse_data(json.dumps(build_blocked_chat_completions_payload(payload.get("model")), ensure_ascii=False))
+            self._write_sse_done()
+            return
+
+        try:
+            with self.server.gateway_client.open_stream(
+                "/chat/completions",
+                sanitized_payload,
+                self._request_headers_dict(),
+            ) as upstream_response:
+                self._start_sse_response(
+                    HTTPStatus(upstream_response.status),
+                    {"X-APG-Action": action, **self._filtered_response_headers(dict(upstream_response.headers.items()))},
+                )
+                self._proxy_chat_sse(upstream_response, token_map)
+        except GatewayHTTPError as exc:
+            self._write_json(HTTPStatus(exc.status_code), exc.payload)
+        except GatewayClientError as exc:
+            self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
 
     def _handle_create_session(self, payload: dict) -> None:
         profile = payload.get("profile")
@@ -461,13 +1065,106 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 payload[name] = content.decode(part.get_content_charset() or "utf-8", errors="replace")
         return payload
 
-    def _write_json(self, status: HTTPStatus, payload: dict) -> None:
+    def _request_headers_dict(self) -> dict[str, str]:
+        return {key: value for key, value in self.headers.items()}
+
+    def _filtered_response_headers(self, headers: dict[str, str]) -> dict[str, str]:
+        passthrough: dict[str, str] = {}
+        for key in ("OpenAI-Processing-Ms", "OpenAI-Version", "X-Request-Id"):
+            value = headers.get(key)
+            if value:
+                passthrough[key] = value
+        return passthrough
+
+    def _write_json(self, status: HTTPStatus, payload: dict, extra_headers: dict[str, str] | None = None) -> None:
         body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if extra_headers:
+            for key, value in extra_headers.items():
+                self.send_header(key, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _start_sse_response(self, status: HTTPStatus, extra_headers: dict[str, str] | None = None) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        if extra_headers:
+            for key, value in extra_headers.items():
+                self.send_header(key, value)
+        self.end_headers()
+
+    def _write_sse_data(self, data: str) -> None:
+        self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
+        self.wfile.flush()
+
+    def _write_sse_done(self) -> None:
+        self._write_sse_data("[DONE]")
+
+    def _proxy_chat_sse(self, upstream_response, token_map: dict[str, str]) -> None:
+        while True:
+            raw_line = upstream_response.readline()
+            if not raw_line:
+                break
+            line = raw_line.decode("utf-8", errors="replace")
+            if line.startswith("data:"):
+                payload_text = line[5:].strip()
+                if payload_text == "[DONE]":
+                    self._write_sse_done()
+                    continue
+                try:
+                    event_payload = json.loads(payload_text)
+                except json.JSONDecodeError:
+                    restored_text = restore_response(payload_text, token_map)
+                    self._write_sse_data(restored_text)
+                    continue
+                restored_payload = restore_json_strings(event_payload, token_map)
+                self._write_sse_data(json.dumps(restored_payload, ensure_ascii=False))
+                continue
+
+            self.wfile.write(line.replace("\r\n", "\n").encode("utf-8"))
+            self.wfile.flush()
+
+    def _proxy_responses_sse(self, upstream_response, token_map: dict[str, str]) -> None:
+        restore_stream_text = create_streaming_token_restorer(token_map)
+
+        while True:
+            raw_line = upstream_response.readline()
+            if not raw_line:
+                break
+            line = raw_line.decode("utf-8", errors="replace")
+            if not line.startswith("data:"):
+                self.wfile.write(line.replace("\r\n", "\n").encode("utf-8"))
+                self.wfile.flush()
+                continue
+
+            payload_text = line[5:].strip()
+            if payload_text == "[DONE]":
+                self._write_sse_done()
+                continue
+
+            try:
+                event_payload = json.loads(payload_text)
+            except json.JSONDecodeError:
+                self._write_sse_data(restore_response(payload_text, token_map))
+                continue
+
+            restored_payload = restore_json_strings(event_payload, token_map)
+            event_type = restored_payload.get("type")
+            output_index = restored_payload.get("output_index", 0)
+            content_index = restored_payload.get("content_index", 0)
+            item_id = restored_payload.get("item_id", "default")
+            field_key = f"{item_id}:{output_index}:{content_index}"
+
+            if event_type == "response.output_text.delta" and isinstance(restored_payload.get("delta"), str):
+                restored_payload["delta"] = restore_stream_text(field_key, restored_payload["delta"])
+            elif event_type == "response.output_text.done" and isinstance(restored_payload.get("text"), str):
+                restored_payload["text"] = restore_stream_text(field_key, restored_payload["text"], flush=True)
+
+            self._write_sse_data(json.dumps(restored_payload, ensure_ascii=False))
 
 
 class GuardHTTPServer(ThreadingHTTPServer):
@@ -477,10 +1174,14 @@ class GuardHTTPServer(ThreadingHTTPServer):
         RequestHandlerClass,
         session_store: SessionStore,
         model_client: ModelClient,
+        gateway_client: GatewayClient,
+        gateway_profile: str,
     ):
         super().__init__(server_address, RequestHandlerClass)
         self.session_store = session_store
         self.model_client = model_client
+        self.gateway_client = gateway_client
+        self.gateway_profile = gateway_profile
 
 
 def parse_args() -> argparse.Namespace:
@@ -495,9 +1196,20 @@ def main() -> int:
     args = parse_args()
     session_store = SessionStore(Path(args.output_dir))
     model_client = ModelClient.from_env()
-    server = GuardHTTPServer((args.host, args.port), GuardHTTPRequestHandler, session_store, model_client)
+    gateway_client = GatewayClient.from_env()
+    gateway_profile = os.environ.get("APG_GATEWAY_PROFILE", "coding")
+    server = GuardHTTPServer(
+        (args.host, args.port),
+        GuardHTTPRequestHandler,
+        session_store,
+        model_client,
+        gateway_client,
+        gateway_profile,
+    )
     print(f"Agent Privacy Guard API listening on http://{args.host}:{args.port}")
     print(f"Model provider: {model_client.provider} ({model_client.model})")
+    print(f"Gateway upstream: {gateway_client.base_url or 'disabled'}")
+    print(f"Gateway profile: {gateway_profile}")
     print(f"Session output dir: {Path(args.output_dir).resolve()}")
     try:
         server.serve_forever()

@@ -5,10 +5,115 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from model_client import ModelClient
-from server import GuardHTTPRequestHandler, GuardHTTPServer, SessionStore
+from server import GatewayClient, GuardHTTPRequestHandler, GuardHTTPServer, SessionStore
+
+
+class StubUpstreamHandler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args) -> None:
+        return
+
+    def do_POST(self) -> None:
+        content_length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+        self.server.requests.append((self.path, payload, dict(self.headers)))
+
+        if payload.get("stream") is True:
+            if self.path == "/responses":
+                last_text = payload["input"][-1]["content"][0]["text"]
+                body = (
+                    'data: {"type":"response.created","response":{"id":"resp_test","object":"response","status":"in_progress"}}\n\n'
+                    'data: {"type":"response.output_item.added","response_id":"resp_test","output_index":0,"item":{"id":"msg_test","type":"message","role":"assistant","status":"in_progress","content":[]}}\n\n'
+                    'data: {"type":"response.output_text.delta","delta":"reply:'
+                    + last_text
+                    + '","response_id":"resp_test","item_id":"msg_test","output_index":0,"content_index":0}\n\n'
+                    'data: {"type":"response.output_text.done","text":"reply:'
+                    + last_text
+                    + '","response_id":"resp_test","item_id":"msg_test","output_index":0,"content_index":0}\n\n'
+                    'data: {"type":"response.completed","response":{"id":"resp_test","object":"response","status":"completed"}}\n\n'
+                    "data: [DONE]\n\n"
+                ).encode("utf-8")
+            elif self.path == "/chat/completions":
+                last_text = payload["messages"][-1]["content"]
+                body = (
+                    'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"reply:'
+                    + last_text
+                    + '"},"finish_reason":null}]}\n\n'
+                    'data: {"id":"chatcmpl_test","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                    "data: [DONE]\n\n"
+                ).encode("utf-8")
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            return
+
+        if self.path == "/responses":
+            last_text = payload["input"][-1]["content"][0]["text"]
+            body = {
+                "id": "resp_test",
+                "object": "response",
+                "status": "completed",
+                "model": payload.get("model", "test-model"),
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": f"reply:{last_text}",
+                            }
+                        ],
+                    }
+                ],
+                "output_text": f"reply:{last_text}",
+            }
+        elif self.path == "/chat/completions":
+            last_text = payload["messages"][-1]["content"]
+            body = {
+                "id": "chatcmpl_test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": payload.get("model", "test-model"),
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": f"reply:{last_text}",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+        else:
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        encoded = json.dumps(body).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+
+class StubUpstreamServer(ThreadingHTTPServer):
+    def __init__(self, server_address, handler_class):
+        super().__init__(server_address, handler_class)
+        self.requests = []
 
 
 class ServerTests(unittest.TestCase):
@@ -18,7 +123,18 @@ class ServerTests(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.session_store = SessionStore(Path(self.tmpdir.name))
         self.model_client = ModelClient(provider="mock", model="mock-gpt")
-        self.server = GuardHTTPServer(("127.0.0.1", 0), GuardHTTPRequestHandler, self.session_store, self.model_client)
+        self.upstream = StubUpstreamServer(("127.0.0.1", 0), StubUpstreamHandler)
+        self.upstream_thread = threading.Thread(target=self.upstream.serve_forever, daemon=True)
+        self.upstream_thread.start()
+        gateway_client = GatewayClient(base_url=f"http://127.0.0.1:{self.upstream.server_port}", timeout_seconds=10)
+        self.server = GuardHTTPServer(
+            ("127.0.0.1", 0),
+            GuardHTTPRequestHandler,
+            self.session_store,
+            self.model_client,
+            gateway_client,
+            "coding",
+        )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.base_url = f"http://127.0.0.1:{self.server.server_port}"
@@ -27,6 +143,9 @@ class ServerTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
+        self.upstream.shutdown()
+        self.upstream.server_close()
+        self.upstream_thread.join(timeout=5)
         self.tmpdir.cleanup()
         if self.original_ner_backend is None:
             os.environ.pop("APG_NER_BACKEND", None)
@@ -64,6 +183,17 @@ class ServerTests(unittest.TestCase):
                 return response.status, json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def request_text(self, method: str, path: str, payload: dict) -> tuple[int, str, str]:
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            f"{self.base_url}{path}",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method=method,
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, response.headers.get("Content-Type", ""), response.read().decode("utf-8")
 
     def test_create_preview_and_message_flow(self) -> None:
         status, created = self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "demo-session"})
@@ -139,6 +269,163 @@ class ServerTests(unittest.TestCase):
         coding_template = next(item for item in payload["templates"] if item["profile"] == "coding")
         self.assertEqual(coding_template["title"], "代码场景隐私模板")
         self.assertGreater(len(coding_template["sample_inputs"]), 0)
+
+
+    def test_gateway_responses_route_masks_request_and_restores_reply(self) -> None:
+        status, payload = self.request_json(
+            "POST",
+            "/v1/responses",
+            {
+                "model": "test-model",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "email=test@example.com"}],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["output_text"], "reply:email=test@example.com")
+        upstream_path, upstream_payload, _ = self.upstream.requests[-1]
+        self.assertEqual(upstream_path, "/responses")
+        self.assertIn("[USER_EMAIL_", upstream_payload["input"][-1]["content"][0]["text"])
+
+    def test_gateway_chat_completions_route_masks_request_and_restores_reply(self) -> None:
+        status, payload = self.request_json(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "email=test@example.com"}],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["choices"][0]["message"]["content"], "reply:email=test@example.com")
+        upstream_path, upstream_payload, _ = self.upstream.requests[-1]
+        self.assertEqual(upstream_path, "/chat/completions")
+        self.assertIn("[USER_EMAIL_", upstream_payload["messages"][-1]["content"])
+
+    def test_gateway_blockable_text_is_masked_and_forwarded(self) -> None:
+        before_count = len(self.upstream.requests)
+        status, payload = self.request_json(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": "test-model",
+                "messages": [
+                    {"role": "user", "content": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz"},
+                ],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("reply:Authorization: Bearer ", payload["choices"][0]["message"]["content"])
+        self.assertEqual(len(self.upstream.requests), before_count + 1)
+        upstream_path, upstream_payload, _ = self.upstream.requests[-1]
+        self.assertEqual(upstream_path, "/chat/completions")
+        self.assertIn("[AUTH_TOKEN_", upstream_payload["messages"][-1]["content"])
+
+    def test_gateway_chat_completions_stream_restores_sse_chunks(self) -> None:
+        status, content_type, body = self.request_text(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": "test-model",
+                "stream": True,
+                "messages": [{"role": "user", "content": "email=test@example.com"}],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("text/event-stream", content_type)
+        self.assertIn("reply:email=test@example.com", body)
+        self.assertIn("data: [DONE]", body)
+        upstream_path, upstream_payload, _ = self.upstream.requests[-1]
+        self.assertEqual(upstream_path, "/chat/completions")
+        self.assertTrue(upstream_payload["stream"])
+
+    def test_gateway_responses_stream_restores_sse_chunks(self) -> None:
+        status, content_type, body = self.request_text(
+            "POST",
+            "/v1/responses",
+            {
+                "model": "test-model",
+                "stream": True,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "email=test@example.com"}],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("text/event-stream", content_type)
+        self.assertIn("reply:email=test@example.com", body)
+        self.assertIn("data: [DONE]", body)
+        upstream_path, upstream_payload, _ = self.upstream.requests[-1]
+        self.assertEqual(upstream_path, "/responses")
+        self.assertTrue(upstream_payload["stream"])
+
+    def test_gateway_responses_stream_blockable_text_is_masked_and_completes(self) -> None:
+        before_count = len(self.upstream.requests)
+        status, content_type, body = self.request_text(
+            "POST",
+            "/v1/responses",
+            {
+                "model": "test-model",
+                "stream": True,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("text/event-stream", content_type)
+        self.assertIn('"type": "response.created"', body)
+        self.assertIn('"type": "response.output_item.added"', body)
+        self.assertIn('"type": "response.output_text.delta"', body)
+        self.assertIn('"type": "response.output_text.done"', body)
+        self.assertIn('"type": "response.completed"', body)
+        self.assertIn("data: [DONE]", body)
+        self.assertEqual(len(self.upstream.requests), before_count + 1)
+        upstream_path, upstream_payload, _ = self.upstream.requests[-1]
+        self.assertEqual(upstream_path, "/responses")
+        self.assertIn("[AUTH_TOKEN_", upstream_payload["input"][-1]["content"][0]["text"])
+
+    def test_gateway_responses_stream_preserves_codex_event_sequence(self) -> None:
+        status, content_type, body = self.request_text(
+            "POST",
+            "/v1/responses",
+            {
+                "model": "test-model",
+                "stream": True,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "email=test@example.com"}],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("text/event-stream", content_type)
+        self.assertIn('"type": "response.created"', body)
+        self.assertIn('"type": "response.output_item.added"', body)
+        self.assertIn('"type": "response.output_text.delta"', body)
+        self.assertIn('"type": "response.output_text.done"', body)
+        self.assertIn('"type": "response.completed"', body)
+        self.assertLess(body.index('"type": "response.created"'), body.index('"type": "response.output_item.added"'))
+        self.assertLess(body.index('"type": "response.output_item.added"'), body.index('"type": "response.output_text.delta"'))
+        self.assertLess(body.index('"type": "response.output_text.delta"'), body.index('"type": "response.output_text.done"'))
+        self.assertLess(body.index('"type": "response.output_text.done"'), body.index('"type": "response.completed"'))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,6 @@
+# Project-local MCP configuration for Agent Privacy Guard.
+# This server is available only when Codex opens this repository.
+[mcp_servers.privacy_guard]
+command = "python"
+args = ["mcp_server.py"]
+cwd = "C:\\Users\\jiahjq\\Desktop\\summer_projection"
