@@ -248,6 +248,15 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertIn("Route not found", payload["error"])
 
+    def test_debug_console_is_available(self) -> None:
+        request = urllib.request.Request(f"{self.base_url}/debug", method="GET")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = response.read().decode("utf-8")
+        self.assertEqual(response.status, 200)
+        self.assertIn("text/html", response.headers.get("Content-Type", ""))
+        self.assertIn("Agent Privacy Guard", body)
+        self.assertIn("真实 Codex 会话", body)
+
     def test_preview_file_upload(self) -> None:
         self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "file-session"})
         status, preview = self.request_multipart(
@@ -290,6 +299,19 @@ class ServerTests(unittest.TestCase):
         upstream_path, upstream_payload, _ = self.upstream.requests[-1]
         self.assertEqual(upstream_path, "/responses")
         self.assertIn("[USER_EMAIL_", upstream_payload["input"][-1]["content"][0]["text"])
+
+        status, sessions_payload = self.request_json("GET", "/gateway-traces")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(sessions_payload["sessions"]), 1)
+        session_id = sessions_payload["sessions"][0]["session_id"]
+        status, trace_session = self.request_json("GET", f"/gateway-traces/{session_id}")
+        self.assertEqual(status, 200)
+        trace = trace_session["traces"][0]
+        self.assertEqual(trace["original_text"], "email=test@example.com")
+        self.assertIn("[USER_EMAIL_", trace["sent_text"])
+        self.assertIn("[USER_EMAIL_", trace["assistant_raw_reply"])
+        self.assertEqual(trace["assistant_reply"], "reply:email=test@example.com")
+        self.assertEqual(trace["status"], "completed")
 
     def test_gateway_chat_completions_route_masks_request_and_restores_reply(self) -> None:
         status, payload = self.request_json(
@@ -365,6 +387,43 @@ class ServerTests(unittest.TestCase):
         upstream_path, upstream_payload, _ = self.upstream.requests[-1]
         self.assertEqual(upstream_path, "/responses")
         self.assertTrue(upstream_payload["stream"])
+
+        status, sessions_payload = self.request_json("GET", "/gateway-traces")
+        self.assertEqual(status, 200)
+        session_id = sessions_payload["sessions"][0]["session_id"]
+        status, trace_session = self.request_json("GET", f"/gateway-traces/{session_id}")
+        self.assertEqual(status, 200)
+        trace = trace_session["traces"][0]
+        self.assertEqual(trace["status"], "completed")
+        self.assertIn("[USER_EMAIL_", trace["assistant_raw_reply"])
+        self.assertEqual(trace["assistant_reply"], "reply:email=test@example.com")
+        self.assertTrue(Path(trace["artifacts"]["stream_raw"]).exists())
+
+    def test_gateway_traces_group_requests_by_prompt_cache_key(self) -> None:
+        for message in ("first", "second"):
+            status, _ = self.request_json(
+                "POST",
+                "/v1/responses",
+                {
+                    "model": "test-model",
+                    "prompt_cache_key": "codex-thread-123",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": message}],
+                        }
+                    ],
+                },
+            )
+            self.assertEqual(status, 200)
+
+        status, sessions_payload = self.request_json("GET", "/gateway-traces")
+        self.assertEqual(status, 200)
+        self.assertEqual(len(sessions_payload["sessions"]), 1)
+        session_id = sessions_payload["sessions"][0]["session_id"]
+        status, trace_session = self.request_json("GET", f"/gateway-traces/{session_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual([trace["original_text"] for trace in trace_session["traces"]], ["first", "second"])
 
     def test_gateway_responses_stream_blockable_text_is_masked_and_completes(self) -> None:
         before_count = len(self.upstream.requests)

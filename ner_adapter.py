@@ -19,6 +19,7 @@ class EntitySpan:
 
 NAME_CUE_PATTERNS = [
     re.compile(r"(?:(?:我叫|姓名是|姓名|名字是|名字|联系人是|联系人|收件人是|收件人)\s*[:：]?\s*)([\u4e00-\u9fff]{2,4})"),
+    re.compile(r"(?:(?:我是|本人是)\s*[:：]?\s*)([\u4e00-\u9fff]{2,4})(?=$|[，,。.!！?？；;、\s])"),
     re.compile(r"(?:(?:my name is|name is|contact is|recipient is)\s+)([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})"),
 ]
 

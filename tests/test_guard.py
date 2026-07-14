@@ -111,6 +111,24 @@ class GuardScriptTests(unittest.TestCase):
         self.assertIn("Person Name: 1", stdout)
         self.assertIn("Street Address: 1", stdout)
 
+    def test_first_person_name_cue_masks_name_but_not_job_title(self) -> None:
+        name_result = self.run_guard(
+            "--stdin",
+            "--profile",
+            "coding",
+            input_text="我是小明，问一下1+1等于几\n",
+        )
+        self.assertIn("Person Name: 1", name_result.stdout)
+        self.assertIn("我是[PERSON_NAME_", name_result.stdout)
+
+        title_result = self.run_guard(
+            "--stdin",
+            "--profile",
+            "coding",
+            input_text="我是软件工程师\n",
+        )
+        self.assertNotIn("Person Name:", title_result.stdout)
+
     def test_database_url_and_cloud_credentials_block_as_secret(self) -> None:
         result = self.run_guard(
             "--stdin",

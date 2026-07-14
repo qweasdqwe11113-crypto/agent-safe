@@ -1,0 +1,6 @@
+{
+  "provider": "mock",
+  "model": "mock-gpt",
+  "history_length": 2,
+  "reply_text": "[mock:coding] turn 3 received. Latest message: 我叫[PERSON_NAME_7b496b]"
+}

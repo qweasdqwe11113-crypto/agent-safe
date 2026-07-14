@@ -30,7 +30,11 @@ from guard_core import (
     scan_text,
 )
 from model_client import ModelClient, ModelClientError
+from gateway_trace import GatewayTraceStore, extract_chat_text, extract_responses_text
 from session_state import SessionState, TurnRecord, append_turn, load_session, save_session_log
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+DEBUG_CONSOLE_PATH = PROJECT_ROOT / "web" / "debug.html"
 
 
 class SessionStore:
@@ -577,6 +581,23 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.OK, {"status": "ok"})
             return
 
+        if path == "/debug":
+            self._write_debug_console()
+            return
+
+        if path == "/gateway-traces":
+            self._write_json(HTTPStatus.OK, {"sessions": self.server.trace_store.list_sessions()})
+            return
+
+        if path.startswith("/gateway-traces/"):
+            session_id = path.split("/")[2] if len(path.split("/")) > 2 else ""
+            session = self.server.trace_store.get_session(session_id)
+            if session is None:
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": "Gateway trace session not found"})
+                return
+            self._write_json(HTTPStatus.OK, session)
+            return
+
         if path == "/profiles":
             self._write_json(
                 HTTPStatus.OK,
@@ -668,10 +689,24 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
 
         profile = self.server.gateway_profile
         sanitized_payload, token_map, action = sanitize_responses_payload(payload, profile)
+        trace = self.server.trace_store.start_trace(
+            "/responses", payload, sanitized_payload, token_map, action, self._request_headers_dict()
+        )
         if action == "block":
+            blocked_payload = build_blocked_responses_payload(payload.get("model"))
+            self.server.trace_store.complete_trace(
+                trace,
+                raw_reply=extract_responses_text(blocked_payload),
+                restored_reply=extract_responses_text(blocked_payload),
+                raw_payload=blocked_payload,
+                restored_payload=blocked_payload,
+                upstream_status=200,
+                status="blocked",
+                response_id=blocked_payload.get("id"),
+            )
             self._write_json(
                 HTTPStatus.OK,
-                build_blocked_responses_payload(payload.get("model")),
+                blocked_payload,
                 extra_headers={"X-APG-Action": "block"},
             )
             return
@@ -683,10 +718,21 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._request_headers_dict(),
             )
         except GatewayClientError as exc:
+            self.server.trace_store.complete_trace(trace, status="error", error=str(exc))
             self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
             return
 
         restored_payload = restore_responses_payload(upstream_payload, token_map)
+        self.server.trace_store.complete_trace(
+            trace,
+            raw_reply=extract_responses_text(upstream_payload),
+            restored_reply=extract_responses_text(restored_payload),
+            raw_payload=upstream_payload,
+            restored_payload=restored_payload,
+            upstream_status=status,
+            status="completed" if status < 400 else "error",
+            response_id=upstream_payload.get("id"),
+        )
         self._write_json(
             HTTPStatus(status),
             restored_payload,
@@ -700,10 +746,24 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
 
         profile = self.server.gateway_profile
         sanitized_payload, token_map, action = sanitize_chat_completions_payload(payload, profile)
+        trace = self.server.trace_store.start_trace(
+            "/chat/completions", payload, sanitized_payload, token_map, action, self._request_headers_dict()
+        )
         if action == "block":
+            blocked_payload = build_blocked_chat_completions_payload(payload.get("model"))
+            self.server.trace_store.complete_trace(
+                trace,
+                raw_reply=extract_chat_text(blocked_payload),
+                restored_reply=extract_chat_text(blocked_payload),
+                raw_payload=blocked_payload,
+                restored_payload=blocked_payload,
+                upstream_status=200,
+                status="blocked",
+                response_id=blocked_payload.get("id"),
+            )
             self._write_json(
                 HTTPStatus.OK,
-                build_blocked_chat_completions_payload(payload.get("model")),
+                blocked_payload,
                 extra_headers={"X-APG-Action": "block"},
             )
             return
@@ -715,10 +775,21 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 self._request_headers_dict(),
             )
         except GatewayClientError as exc:
+            self.server.trace_store.complete_trace(trace, status="error", error=str(exc))
             self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
             return
 
         restored_payload = restore_chat_completions_payload(upstream_payload, token_map)
+        self.server.trace_store.complete_trace(
+            trace,
+            raw_reply=extract_chat_text(upstream_payload),
+            restored_reply=extract_chat_text(restored_payload),
+            raw_payload=upstream_payload,
+            restored_payload=restored_payload,
+            upstream_status=status,
+            status="completed" if status < 400 else "error",
+            response_id=upstream_payload.get("id"),
+        )
         self._write_json(
             HTTPStatus(status),
             restored_payload,
@@ -728,11 +799,28 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
     def _handle_gateway_responses_stream(self, payload: dict) -> None:
         profile = self.server.gateway_profile
         sanitized_payload, token_map, action = sanitize_responses_payload(payload, profile)
+        trace = self.server.trace_store.start_trace(
+            "/responses", payload, sanitized_payload, token_map, action, self._request_headers_dict()
+        )
         if action == "block":
+            events = build_blocked_responses_stream_events(payload.get("model"))
             self._start_sse_response(HTTPStatus.OK, {"X-APG-Action": "block"})
-            for event in build_blocked_responses_stream_events(payload.get("model")):
+            for event in events:
+                self.server.trace_store.append_stream_event(trace, event, event)
                 self._write_sse_data(json.dumps(event, ensure_ascii=False))
             self._write_sse_done()
+            completed = next((event.get("response", {}) for event in events if event.get("type") == "response.completed"), {})
+            reply = extract_responses_text(completed)
+            self.server.trace_store.complete_trace(
+                trace,
+                raw_reply=reply,
+                restored_reply=reply,
+                raw_payload=completed,
+                restored_payload=completed,
+                upstream_status=200,
+                status="blocked",
+                response_id=completed.get("id"),
+            )
             return
 
         try:
@@ -745,19 +833,52 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                     HTTPStatus(upstream_response.status),
                     {"X-APG-Action": action, **self._filtered_response_headers(dict(upstream_response.headers.items()))},
                 )
-                self._proxy_responses_sse(upstream_response, token_map)
+                stream_result = self._proxy_responses_sse(upstream_response, token_map, trace)
+                self.server.trace_store.complete_trace(
+                    trace,
+                    raw_reply=stream_result["raw_reply"],
+                    restored_reply=stream_result["restored_reply"],
+                    upstream_status=upstream_response.status,
+                    status="completed" if stream_result["completed"] else "incomplete",
+                    response_id=stream_result["response_id"],
+                )
         except GatewayHTTPError as exc:
+            self.server.trace_store.complete_trace(
+                trace,
+                raw_payload=exc.payload,
+                restored_payload=exc.payload,
+                upstream_status=exc.status_code,
+                status="error",
+                error=str(exc),
+            )
             self._write_json(HTTPStatus(exc.status_code), exc.payload)
         except GatewayClientError as exc:
+            self.server.trace_store.complete_trace(trace, status="error", error=str(exc))
             self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
 
     def _handle_gateway_chat_completions_stream(self, payload: dict) -> None:
         profile = self.server.gateway_profile
         sanitized_payload, token_map, action = sanitize_chat_completions_payload(payload, profile)
+        trace = self.server.trace_store.start_trace(
+            "/chat/completions", payload, sanitized_payload, token_map, action, self._request_headers_dict()
+        )
         if action == "block":
+            blocked_payload = build_blocked_chat_completions_payload(payload.get("model"))
             self._start_sse_response(HTTPStatus.OK, {"X-APG-Action": "block"})
-            self._write_sse_data(json.dumps(build_blocked_chat_completions_payload(payload.get("model")), ensure_ascii=False))
+            self.server.trace_store.append_stream_event(trace, blocked_payload, blocked_payload)
+            self._write_sse_data(json.dumps(blocked_payload, ensure_ascii=False))
             self._write_sse_done()
+            reply = extract_chat_text(blocked_payload)
+            self.server.trace_store.complete_trace(
+                trace,
+                raw_reply=reply,
+                restored_reply=reply,
+                raw_payload=blocked_payload,
+                restored_payload=blocked_payload,
+                upstream_status=200,
+                status="blocked",
+                response_id=blocked_payload.get("id"),
+            )
             return
 
         try:
@@ -770,10 +891,27 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                     HTTPStatus(upstream_response.status),
                     {"X-APG-Action": action, **self._filtered_response_headers(dict(upstream_response.headers.items()))},
                 )
-                self._proxy_chat_sse(upstream_response, token_map)
+                stream_result = self._proxy_chat_sse(upstream_response, token_map, trace)
+                self.server.trace_store.complete_trace(
+                    trace,
+                    raw_reply=stream_result["raw_reply"],
+                    restored_reply=stream_result["restored_reply"],
+                    upstream_status=upstream_response.status,
+                    status="completed" if stream_result["completed"] else "incomplete",
+                    response_id=stream_result["response_id"],
+                )
         except GatewayHTTPError as exc:
+            self.server.trace_store.complete_trace(
+                trace,
+                raw_payload=exc.payload,
+                restored_payload=exc.payload,
+                upstream_status=exc.status_code,
+                status="error",
+                error=str(exc),
+            )
             self._write_json(HTTPStatus(exc.status_code), exc.payload)
         except GatewayClientError as exc:
+            self.server.trace_store.complete_trace(trace, status="error", error=str(exc))
             self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
 
     def _handle_create_session(self, payload: dict) -> None:
@@ -1087,6 +1225,17 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _write_debug_console(self) -> None:
+        if not DEBUG_CONSOLE_PATH.exists():
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "Debug console not found"})
+            return
+        body = DEBUG_CONSOLE_PATH.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _start_sse_response(self, status: HTTPStatus, extra_headers: dict[str, str] | None = None) -> None:
         self.send_response(status)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -1104,7 +1253,11 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
     def _write_sse_done(self) -> None:
         self._write_sse_data("[DONE]")
 
-    def _proxy_chat_sse(self, upstream_response, token_map: dict[str, str]) -> None:
+    def _proxy_chat_sse(self, upstream_response, token_map: dict[str, str], trace: dict) -> dict:
+        raw_parts: list[str] = []
+        restored_parts: list[str] = []
+        response_id: str | None = None
+        completed = False
         while True:
             raw_line = upstream_response.readline()
             if not raw_line:
@@ -1113,23 +1266,51 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             if line.startswith("data:"):
                 payload_text = line[5:].strip()
                 if payload_text == "[DONE]":
+                    completed = True
+                    self.server.trace_store.append_stream_event(trace, "[DONE]", "[DONE]")
                     self._write_sse_done()
                     continue
                 try:
                     event_payload = json.loads(payload_text)
                 except json.JSONDecodeError:
                     restored_text = restore_response(payload_text, token_map)
+                    self.server.trace_store.append_stream_event(trace, payload_text, restored_text)
                     self._write_sse_data(restored_text)
                     continue
                 restored_payload = restore_json_strings(event_payload, token_map)
+                response_id = response_id or event_payload.get("id")
+                choices = event_payload.get("choices")
+                restored_choices = restored_payload.get("choices")
+                if isinstance(choices, list) and isinstance(restored_choices, list):
+                    for raw_choice, restored_choice in zip(choices, restored_choices):
+                        raw_delta = raw_choice.get("delta") if isinstance(raw_choice, dict) else None
+                        restored_delta = restored_choice.get("delta") if isinstance(restored_choice, dict) else None
+                        if isinstance(raw_delta, dict) and isinstance(raw_delta.get("content"), str):
+                            raw_parts.append(raw_delta["content"])
+                        if isinstance(restored_delta, dict) and isinstance(restored_delta.get("content"), str):
+                            restored_parts.append(restored_delta["content"])
+                self.server.trace_store.append_stream_event(trace, event_payload, restored_payload)
                 self._write_sse_data(json.dumps(restored_payload, ensure_ascii=False))
                 continue
 
             self.wfile.write(line.replace("\r\n", "\n").encode("utf-8"))
             self.wfile.flush()
 
-    def _proxy_responses_sse(self, upstream_response, token_map: dict[str, str]) -> None:
+        return {
+            "raw_reply": "".join(raw_parts),
+            "restored_reply": "".join(restored_parts),
+            "response_id": response_id,
+            "completed": completed,
+        }
+
+    def _proxy_responses_sse(self, upstream_response, token_map: dict[str, str], trace: dict) -> dict:
         restore_stream_text = create_streaming_token_restorer(token_map)
+        raw_parts: list[str] = []
+        restored_parts: list[str] = []
+        done_raw_text = ""
+        done_restored_text = ""
+        response_id: str | None = None
+        completed = False
 
         while True:
             raw_line = upstream_response.readline()
@@ -1143,28 +1324,51 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
 
             payload_text = line[5:].strip()
             if payload_text == "[DONE]":
+                self.server.trace_store.append_stream_event(trace, "[DONE]", "[DONE]")
                 self._write_sse_done()
                 continue
 
             try:
                 event_payload = json.loads(payload_text)
             except json.JSONDecodeError:
-                self._write_sse_data(restore_response(payload_text, token_map))
+                restored_text = restore_response(payload_text, token_map)
+                self.server.trace_store.append_stream_event(trace, payload_text, restored_text)
+                self._write_sse_data(restored_text)
                 continue
 
             restored_payload = restore_json_strings(event_payload, token_map)
             event_type = restored_payload.get("type")
+            if event_type == "response.completed":
+                completed = True
+            response = event_payload.get("response")
+            if isinstance(response, dict):
+                response_id = response_id or response.get("id")
+            response_id = response_id or event_payload.get("response_id")
             output_index = restored_payload.get("output_index", 0)
             content_index = restored_payload.get("content_index", 0)
             item_id = restored_payload.get("item_id", "default")
             field_key = f"{item_id}:{output_index}:{content_index}"
 
             if event_type == "response.output_text.delta" and isinstance(restored_payload.get("delta"), str):
+                if isinstance(event_payload.get("delta"), str):
+                    raw_parts.append(event_payload["delta"])
                 restored_payload["delta"] = restore_stream_text(field_key, restored_payload["delta"])
+                restored_parts.append(restored_payload["delta"])
             elif event_type == "response.output_text.done" and isinstance(restored_payload.get("text"), str):
+                if isinstance(event_payload.get("text"), str):
+                    done_raw_text = event_payload["text"]
                 restored_payload["text"] = restore_stream_text(field_key, restored_payload["text"], flush=True)
+                done_restored_text = restored_payload["text"]
 
+            self.server.trace_store.append_stream_event(trace, event_payload, restored_payload)
             self._write_sse_data(json.dumps(restored_payload, ensure_ascii=False))
+
+        return {
+            "raw_reply": "".join(raw_parts) or done_raw_text,
+            "restored_reply": "".join(restored_parts) or done_restored_text,
+            "response_id": response_id,
+            "completed": completed,
+        }
 
 
 class GuardHTTPServer(ThreadingHTTPServer):
@@ -1176,12 +1380,14 @@ class GuardHTTPServer(ThreadingHTTPServer):
         model_client: ModelClient,
         gateway_client: GatewayClient,
         gateway_profile: str,
+        trace_store: GatewayTraceStore | None = None,
     ):
         super().__init__(server_address, RequestHandlerClass)
         self.session_store = session_store
         self.model_client = model_client
         self.gateway_client = gateway_client
         self.gateway_profile = gateway_profile
+        self.trace_store = trace_store or GatewayTraceStore(session_store.base_dir / "gateway-traces")
 
 
 def parse_args() -> argparse.Namespace:
@@ -1189,12 +1395,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="127.0.0.1", help="Host interface to bind.")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on.")
     parser.add_argument("--output-dir", default="outputs/api-sessions", help="Directory used to store session artifacts.")
+    parser.add_argument("--trace-dir", default="outputs/gateway-traces", help="Directory used to store gateway traces.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     session_store = SessionStore(Path(args.output_dir))
+    trace_store = GatewayTraceStore(Path(args.trace_dir))
     model_client = ModelClient.from_env()
     gateway_client = GatewayClient.from_env()
     gateway_profile = os.environ.get("APG_GATEWAY_PROFILE", "coding")
@@ -1205,12 +1413,14 @@ def main() -> int:
         model_client,
         gateway_client,
         gateway_profile,
+        trace_store,
     )
     print(f"Agent Privacy Guard API listening on http://{args.host}:{args.port}")
     print(f"Model provider: {model_client.provider} ({model_client.model})")
     print(f"Gateway upstream: {gateway_client.base_url or 'disabled'}")
     print(f"Gateway profile: {gateway_profile}")
     print(f"Session output dir: {Path(args.output_dir).resolve()}")
+    print(f"Gateway trace dir: {Path(args.trace_dir).resolve()}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

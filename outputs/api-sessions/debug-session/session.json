@@ -1,0 +1,78 @@
+{
+  "session_id": "debug-session",
+  "profile": "coding",
+  "created_at": "2026-07-13T18:17:41",
+  "session_dir": "outputs\\api-sessions\\debug-session",
+  "turns": [
+    {
+      "turn_id": 1,
+      "user_original": "你好",
+      "user_redacted": "你好",
+      "suggested_action": "allow",
+      "user_sent_text": "你好",
+      "codex_raw_reply": "[mock:coding] turn 1 received. Latest message: 你好",
+      "codex_restored_reply": "[mock:coding] turn 1 received. Latest message: 你好",
+      "token_map_path": null,
+      "artifacts": {
+        "user_original": "outputs\\api-sessions\\debug-session\\turn-001-user-original.txt",
+        "user_safe": "outputs\\api-sessions\\debug-session\\turn-001-user-safe.txt",
+        "model_raw": "outputs\\api-sessions\\debug-session\\turn-001-model-raw.json",
+        "assistant_raw": "outputs\\api-sessions\\debug-session\\turn-001-assistant-raw.txt",
+        "assistant_restored": "outputs\\api-sessions\\debug-session\\turn-001-assistant-restored.txt"
+      }
+    },
+    {
+      "turn_id": 2,
+      "user_original": "1",
+      "user_redacted": "1",
+      "suggested_action": "allow",
+      "user_sent_text": "1",
+      "codex_raw_reply": "[mock:coding] turn 2 received. Latest message: 1",
+      "codex_restored_reply": "[mock:coding] turn 2 received. Latest message: 1",
+      "token_map_path": null,
+      "artifacts": {
+        "user_original": "outputs\\api-sessions\\debug-session\\turn-002-user-original.txt",
+        "user_safe": "outputs\\api-sessions\\debug-session\\turn-002-user-safe.txt",
+        "model_raw": "outputs\\api-sessions\\debug-session\\turn-002-model-raw.json",
+        "assistant_raw": "outputs\\api-sessions\\debug-session\\turn-002-assistant-raw.txt",
+        "assistant_restored": "outputs\\api-sessions\\debug-session\\turn-002-assistant-restored.txt"
+      }
+    },
+    {
+      "turn_id": 3,
+      "user_original": "我叫李阳",
+      "user_redacted": "我叫[PERSON_NAME_7b496b]",
+      "suggested_action": "mask",
+      "user_sent_text": "我叫[PERSON_NAME_7b496b]",
+      "codex_raw_reply": "[mock:coding] turn 3 received. Latest message: 我叫[PERSON_NAME_7b496b]",
+      "codex_restored_reply": "[mock:coding] turn 3 received. Latest message: 我叫李阳",
+      "token_map_path": "outputs\\api-sessions\\debug-session\\turn-003-token-map.json",
+      "artifacts": {
+        "user_original": "outputs\\api-sessions\\debug-session\\turn-003-user-original.txt",
+        "user_safe": "outputs\\api-sessions\\debug-session\\turn-003-user-safe.txt",
+        "model_raw": "outputs\\api-sessions\\debug-session\\turn-003-model-raw.json",
+        "assistant_raw": "outputs\\api-sessions\\debug-session\\turn-003-assistant-raw.txt",
+        "assistant_restored": "outputs\\api-sessions\\debug-session\\turn-003-assistant-restored.txt",
+        "token_map": "outputs\\api-sessions\\debug-session\\turn-003-token-map.json"
+      }
+    },
+    {
+      "turn_id": 4,
+      "user_original": "我叫李阳，问一下1+1等于多少",
+      "user_redacted": "我叫[PERSON_NAME_7b496b]，问一下1+1等于多少",
+      "suggested_action": "mask",
+      "user_sent_text": "我叫[PERSON_NAME_7b496b]，问一下1+1等于多少",
+      "codex_raw_reply": "[mock:coding] turn 4 received. Latest message: 我叫[PERSON_NAME_7b496b]，问一下1+1等于多少",
+      "codex_restored_reply": "[mock:coding] turn 4 received. Latest message: 我叫李阳，问一下1+1等于多少",
+      "token_map_path": "outputs\\api-sessions\\debug-session\\turn-004-token-map.json",
+      "artifacts": {
+        "user_original": "outputs\\api-sessions\\debug-session\\turn-004-user-original.txt",
+        "user_safe": "outputs\\api-sessions\\debug-session\\turn-004-user-safe.txt",
+        "model_raw": "outputs\\api-sessions\\debug-session\\turn-004-model-raw.json",
+        "assistant_raw": "outputs\\api-sessions\\debug-session\\turn-004-assistant-raw.txt",
+        "assistant_restored": "outputs\\api-sessions\\debug-session\\turn-004-assistant-restored.txt",
+        "token_map": "outputs\\api-sessions\\debug-session\\turn-004-token-map.json"
+      }
+    }
+  ]
+}

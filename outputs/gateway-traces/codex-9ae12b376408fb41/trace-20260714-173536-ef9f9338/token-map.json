@@ -1,0 +1,18 @@
+{
+  "[STACK_TRACE_PATH_d775b5]": "C:\\\\Users\\\\jiahjq\\\\Desktop\\\\summer_projection\\\\examples\"]",
+  "[STACK_TRACE_PATH_338a7b]": "C:\\\\Users\\\\jiahjq\\\\Desktop\\\\summer_projection\\\\codex-privacy-filter\\\\examples\"]",
+  "[STACK_TRACE_PATH_b6e955]": "C:\\\\Users\\\\jiahjq\\\\Desktop\\\\summer_projection\\\\examples\\\\json-token-map.json\"]",
+  "[STACK_TRACE_PATH_76dd9c]": "C:\\\\Users\\\\jiahjq\\\\Desktop\\\\summer_projection\\\\examples\\\\plain-token-map.json\"]",
+  "[STACK_TRACE_PATH_e3ed79]": "C:\\\\Users\\\\jiahjq\\\\Desktop\\\\summer_projection\\\\codex-privacy-filter\\\\skills\\\\SKILL.md\"]",
+  "[STACK_TRACE_PATH_79caaf]": "C:\\\\Users\\\\jiahjq\\\\Desktop\\\\summer_projection\\\\codex-privacy-filter\\\\scripts\\\\redact.py\"]",
+  "[STACK_TRACE_PATH_9b6fac]": "C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\", \"-Command\", \"$i=1; Get-Content -Path 'D",
+  "[STACK_TRACE_PATH_400498]": "C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\", \"-Command\", \"$paths = @('D",
+  "[STACK_TRACE_PATH_63404e]": "D:\\\\engine-project-master\\\\engine-project-master\\\\src\\\\main\\\\java\\\\edu\\\\sustech\\\\cs307\\\\value\\\\Value$1.class'); foreach ($path in $paths) { if ((Resolve-Path -LiteralPath $path -ErrorAction SilentlyContinue).Path -like 'D",
+  "[STACK_TRACE_PATH_57a7cb]": "C:\\Users\\jiahjq\\.codex\\visualizations\\2026\\07\\14\\019f5ffa-cd10-7762-877e-3758b9b7c451`, `C",
+  "[PERSON_NAME_162dcf]": "<recipient>",
+  "[STACK_TRACE_PATH_d4fd32]": "C:\\Users\\jiahjq\\Desktop\\summer_projection</cwd>",
+  "[STACK_TRACE_PATH_67bd30]": "C:\\Users\\jiahjq\\Desktop\\summer_projection</root></workspace_roots><permission_profile type=\"managed\"><file_system type=\"restricted\"><entry access=\"read\"><special>",
+  "[STACK_TRACE_PATH_b675a2]": "C:\\Users\\jiahjq\\Desktop\\summer_projection</path></entry><entry access=\"write\"><special>",
+  "[STACK_TRACE_PATH_290430]": "C:\\Users\\jiahjq\\.codex\\visualizations\\2026\\07\\14\\019f5ffa-cd10-7762-877e-3758b9b7c451</path></entry><entry access=\"read\"><path>C",
+  "[STACK_TRACE_PATH_00da9f]": "C:\\Users\\jiahjq\\Desktop\\summer_projection\\.agents</path></entry><entry access=\"read\"><path>C"
+}

@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Privacy Guard 会话记录</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --line: #d9dee7;
+      --text: #20242a;
+      --muted: #687386;
+      --accent: #1769d2;
+      --accent-soft: #eaf2fc;
+      --ok: #087a55;
+      --mask: #a15c00;
+      --danger: #b42318;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    button, input { font: inherit; }
+
+    header {
+      height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      padding: 0 20px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 650;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .refresh {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      padding: 6px 11px;
+      cursor: pointer;
+    }
+
+    .layout {
+      height: calc(100vh - 58px);
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+    }
+
+    aside {
+      min-width: 0;
+      overflow: auto;
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .aside-title {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      justify-content: space-between;
+      padding: 14px 16px 10px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .session-list {
+      display: grid;
+      gap: 2px;
+      padding: 0 8px 12px;
+    }
+
+    .session-item {
+      width: 100%;
+      display: grid;
+      gap: 4px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      padding: 10px;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .session-item:hover { background: #f3f5f8; }
+    .session-item.active { background: var(--accent-soft); }
+
+    .session-name, .session-preview {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .session-name { font-weight: 600; }
+    .session-preview { color: var(--muted); font-size: 12px; }
+
+    .workspace {
+      min-width: 0;
+      overflow: auto;
+      padding: 20px;
+    }
+
+    .conversation-head {
+      max-width: 980px;
+      margin: 0 auto 14px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .conversation-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+
+    .conversation-meta { color: var(--muted); font-size: 12px; }
+
+    .conversation {
+      max-width: 980px;
+      min-height: 360px;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+      margin: 0 auto;
+    }
+
+    .empty {
+      min-height: 320px;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      text-align: center;
+      padding: 24px;
+    }
+
+    .turn {
+      display: grid;
+      gap: 8px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid #e7eaf0;
+    }
+
+    .bubble {
+      max-width: min(780px, 88%);
+      border-radius: 8px;
+      padding: 10px 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .user { justify-self: end; background: #e8eef7; }
+    .assistant { justify-self: start; background: #fff; border: 1px solid var(--line); }
+    .assistant.pending { color: var(--muted); }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 9px 11px;
+      color: var(--muted);
+      user-select: none;
+    }
+
+    .trace { display: grid; gap: 10px; padding: 0 11px 11px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 7px; }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 8px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .pill.allow { color: var(--ok); border-color: #9fe0c3; }
+    .pill.mask { color: var(--mask); border-color: #efc574; }
+    .pill.block, .pill.error { color: var(--danger); border-color: #efaaa5; }
+
+    .trace-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .trace-block { display: grid; gap: 5px; min-width: 0; }
+    .trace-block label { color: var(--muted); font-size: 12px; }
+
+    pre {
+      min-height: 86px;
+      max-height: 300px;
+      margin: 0;
+      overflow: auto;
+      border: 1px solid #e2e6ec;
+      border-radius: 6px;
+      background: #fff;
+      padding: 9px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 760px) {
+      header { height: auto; min-height: 58px; padding: 10px 14px; }
+      .layout { height: auto; grid-template-columns: 1fr; }
+      aside { max-height: 230px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .workspace { padding: 14px; }
+      .trace-grid { grid-template-columns: 1fr; }
+      .bubble { max-width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Agent Privacy Guard 会话记录</h1>
+    <div class="header-actions">
+      <label><input id="autoRefresh" type="checkbox" checked> 自动刷新</label>
+      <button id="refresh" class="refresh" type="button">刷新</button>
+      <span id="status">正在读取真实代理记录</span>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside>
+      <div class="aside-title"><span>真实 Codex 会话</span><span id="sessionCount">0</span></div>
+      <div id="sessionList" class="session-list"></div>
+    </aside>
+
+    <main class="workspace">
+      <div id="conversationHead" class="conversation-head" hidden>
+        <div>
+          <h2 id="conversationTitle" class="conversation-title"></h2>
+          <div id="conversationLabel" class="conversation-meta"></div>
+        </div>
+        <div id="conversationMeta" class="conversation-meta"></div>
+      </div>
+      <section id="conversation" class="conversation" aria-live="polite">
+        <div class="empty">还没有检测到经过本地代理的 Codex 请求。<br>在 Codex 中发送一条消息后，这里会自动出现记录。</div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const sessionList = document.getElementById("sessionList");
+    const sessionCount = document.getElementById("sessionCount");
+    const conversation = document.getElementById("conversation");
+    const conversationHead = document.getElementById("conversationHead");
+    const conversationTitle = document.getElementById("conversationTitle");
+    const conversationLabel = document.getElementById("conversationLabel");
+    const conversationMeta = document.getElementById("conversationMeta");
+    const statusEl = document.getElementById("status");
+    const autoRefresh = document.getElementById("autoRefresh");
+    let selectedSessionId = "";
+    let sessions = [];
+    const expandedTraceIds = new Set();
+
+    function display(value, fallback = "(空)") {
+      return value == null || value === "" ? fallback : String(value);
+    }
+
+    function shortTime(value) {
+      if (!value) return "";
+      return value.replace("T", " ");
+    }
+
+    function setStatus(value) {
+      statusEl.textContent = value;
+    }
+
+    function makeText(tag, className, value) {
+      const element = document.createElement(tag);
+      element.className = className;
+      element.textContent = value;
+      return element;
+    }
+
+    function renderSessionList() {
+      sessionList.replaceChildren();
+      sessionCount.textContent = sessions.length;
+      for (const item of sessions) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `session-item${item.session_id === selectedSessionId ? " active" : ""}`;
+        button.append(
+          makeText("span", "session-name", item.session_id),
+          makeText("span", "session-preview", display(item.latest_text, "等待会话内容")),
+          makeText("span", "session-preview", `${item.trace_count} 次请求 · ${shortTime(item.updated_at)}`),
+        );
+        button.addEventListener("click", () => selectSession(item.session_id));
+        sessionList.append(button);
+      }
+    }
+
+    function traceBlock(labelText, value) {
+      const block = document.createElement("div");
+      block.className = "trace-block";
+      const label = document.createElement("label");
+      label.textContent = labelText;
+      const pre = document.createElement("pre");
+      pre.textContent = display(value);
+      block.append(label, pre);
+      return block;
+    }
+
+    function renderTrace(trace, index) {
+      const turn = document.createElement("article");
+      turn.className = "turn";
+      turn.append(makeText("div", "bubble user", display(trace.original_text)));
+
+      const pending = trace.status === "in_progress";
+      const answer = trace.error
+        ? `代理请求失败：${trace.error}`
+        : pending
+          ? "模型正在回复…"
+          : display(trace.assistant_reply, "该次请求没有文本回复，详情中仍保留完整事件文件。");
+      turn.append(makeText("div", `bubble assistant${pending ? " pending" : ""}`, answer));
+
+      const details = document.createElement("details");
+      details.dataset.traceId = trace.trace_id;
+      details.open = expandedTraceIds.has(trace.trace_id);
+      details.addEventListener("toggle", () => {
+        if (details.open) expandedTraceIds.add(trace.trace_id);
+        else expandedTraceIds.delete(trace.trace_id);
+      });
+      const summary = document.createElement("summary");
+      summary.textContent = "隐私处理详情";
+      const traceBody = document.createElement("div");
+      traceBody.className = "trace";
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      const values = [
+        [`action: ${trace.action}`, `pill ${trace.action}`],
+        [`status: ${trace.status}`, `pill ${trace.status}`],
+        [`turn: ${index + 1}`, "pill"],
+        [`route: ${trace.route}`, "pill"],
+        [`model: ${display(trace.model, "unknown")}`, "pill"],
+        [`tokens: ${trace.token_count || 0}`, "pill"],
+        [shortTime(trace.created_at), "pill"],
+      ];
+      for (const [value, className] of values) meta.append(makeText("span", className, value));
+
+      const grid = document.createElement("div");
+      grid.className = "trace-grid";
+      grid.append(
+        traceBlock("用户原文", trace.original_text),
+        traceBlock("过滤后发给云端的文本", trace.sent_text),
+        traceBlock("云端模型原始回复", trace.assistant_raw_reply),
+        traceBlock("恢复后的最终答案", trace.assistant_reply),
+      );
+      traceBody.append(meta, grid);
+      details.append(summary, traceBody);
+      turn.append(details);
+      return turn;
+    }
+
+    async function loadSession(sessionId) {
+      const response = await fetch(`/gateway-traces/${encodeURIComponent(sessionId)}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "读取会话失败");
+      if (selectedSessionId !== sessionId) return;
+
+      conversationHead.hidden = false;
+      conversationTitle.textContent = payload.session_id;
+      conversationLabel.textContent = payload.label || "本地识别的 Codex 会话";
+      conversationMeta.textContent = `${payload.traces.length} 次请求 · 更新于 ${shortTime(payload.updated_at)}`;
+      conversation.replaceChildren(...payload.traces.map(renderTrace));
+    }
+
+    async function selectSession(sessionId) {
+      selectedSessionId = sessionId;
+      renderSessionList();
+      await loadSession(sessionId);
+    }
+
+    async function refresh() {
+      try {
+        const response = await fetch("/gateway-traces", { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || "读取会话列表失败");
+        sessions = payload.sessions || [];
+        if (!selectedSessionId && sessions.length) selectedSessionId = sessions[0].session_id;
+        if (selectedSessionId && !sessions.some(item => item.session_id === selectedSessionId)) {
+          selectedSessionId = sessions[0]?.session_id || "";
+        }
+        renderSessionList();
+        if (selectedSessionId) await loadSession(selectedSessionId);
+        setStatus(`已连接 · ${shortTime(new Date().toISOString().slice(0, 19))}`);
+      } catch (error) {
+        setStatus(error.message);
+      }
+    }
+
+    document.getElementById("refresh").addEventListener("click", refresh);
+    setInterval(() => { if (autoRefresh.checked) refresh(); }, 2500);
+    refresh();
+  </script>
+</body>
+</html>

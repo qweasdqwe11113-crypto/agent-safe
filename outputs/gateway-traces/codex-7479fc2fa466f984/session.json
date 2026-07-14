@@ -1,0 +1,35 @@
+{
+  "session_id": "codex-7479fc2fa466f984",
+  "label": "prompt_cache_key: 019f6014-ab82-7e63-b803-0e72abeb7dbd",
+  "profile": "",
+  "created_at": "2026-07-14T18:03:51",
+  "updated_at": "2026-07-14T18:03:56",
+  "traces": [
+    {
+      "trace_id": "trace-20260714-180351-07650099",
+      "created_at": "2026-07-14T18:03:51",
+      "updated_at": "2026-07-14T18:03:56",
+      "route": "/responses",
+      "model": "gpt-5.6-terra",
+      "stream": true,
+      "action": "mask",
+      "status": "completed",
+      "original_text": "你好我是李华，问一下1+1\n",
+      "sent_text": "你好我是[PERSON_NAME_ba9d5f]，问一下1+1\n",
+      "assistant_raw_reply": "你好，[PERSON_NAME_ba9d5f]！1 + 1 = 2。",
+      "assistant_reply": "你好，李华！1 + 1 = 2。",
+      "upstream_status": 200,
+      "error": "",
+      "token_count": 17,
+      "artifacts": {
+        "request_original": "outputs\\gateway-traces\\codex-7479fc2fa466f984\\trace-20260714-180351-07650099\\request-original.json",
+        "request_sanitized": "outputs\\gateway-traces\\codex-7479fc2fa466f984\\trace-20260714-180351-07650099\\request-sanitized.json",
+        "token_map": "outputs\\gateway-traces\\codex-7479fc2fa466f984\\trace-20260714-180351-07650099\\token-map.json",
+        "response_raw": "outputs\\gateway-traces\\codex-7479fc2fa466f984\\trace-20260714-180351-07650099\\response-raw.json",
+        "response_restored": "outputs\\gateway-traces\\codex-7479fc2fa466f984\\trace-20260714-180351-07650099\\response-restored.json",
+        "stream_raw": "outputs\\gateway-traces\\codex-7479fc2fa466f984\\trace-20260714-180351-07650099\\stream-raw.jsonl",
+        "stream_restored": "outputs\\gateway-traces\\codex-7479fc2fa466f984\\trace-20260714-180351-07650099\\stream-restored.jsonl"
+      }
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "provider": "mock",
+  "model": "mock-gpt",
+  "history_length": 0,
+  "reply_text": "[mock:coding] turn 1 received. Latest message: 你好"
+}

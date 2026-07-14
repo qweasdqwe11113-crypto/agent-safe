@@ -1,0 +1,6 @@
+{
+  "provider": "mock",
+  "model": "mock-gpt",
+  "history_length": 1,
+  "reply_text": "[mock:coding] turn 2 received. Latest message: 1"
+}

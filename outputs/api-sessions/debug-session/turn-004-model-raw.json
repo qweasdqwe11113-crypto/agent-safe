@@ -1,0 +1,6 @@
+{
+  "provider": "mock",
+  "model": "mock-gpt",
+  "history_length": 3,
+  "reply_text": "[mock:coding] turn 4 received. Latest message: 我叫[PERSON_NAME_7b496b]，问一下1+1等于多少"
+}
