@@ -313,6 +313,32 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(trace["assistant_reply"], "reply:email=test@example.com")
         self.assertEqual(trace["status"], "completed")
 
+    def test_gateway_masks_phone_number_next_to_chinese_text(self) -> None:
+        status, payload = self.request_json(
+            "POST",
+            "/v1/responses",
+            {
+                "model": "test-model",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": "我的电话是13751973809，我问一下agent是什么意思",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("13751973809", payload["output_text"])
+        _, upstream_payload, _ = self.upstream.requests[-1]
+        sent_text = upstream_payload["input"][-1]["content"][0]["text"]
+        self.assertIn("[PHONE_NUMBER_", sent_text)
+        self.assertNotIn("13751973809", sent_text)
+
     def test_gateway_chat_completions_route_masks_request_and_restores_reply(self) -> None:
         status, payload = self.request_json(
             "POST",
@@ -346,6 +372,33 @@ class ServerTests(unittest.TestCase):
         upstream_path, upstream_payload, _ = self.upstream.requests[-1]
         self.assertEqual(upstream_path, "/chat/completions")
         self.assertIn("[AUTH_TOKEN_", upstream_payload["messages"][-1]["content"])
+
+    def test_gateway_masks_generic_sensitive_key_name(self) -> None:
+        secret_value = "short-secret-value"
+        status, payload = self.request_json(
+            "POST",
+            "/v1/responses",
+            {
+                "model": "test-model",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": f"OPENAI_API_KEY={secret_value}",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertIn(secret_value, payload["output_text"])
+        _, upstream_payload, _ = self.upstream.requests[-1]
+        sent_text = upstream_payload["input"][-1]["content"][0]["text"]
+        self.assertIn("[SENSITIVE_SECRET_", sent_text)
+        self.assertNotIn(secret_value, sent_text)
 
     def test_gateway_chat_completions_stream_restores_sse_chunks(self) -> None:
         status, content_type, body = self.request_text(

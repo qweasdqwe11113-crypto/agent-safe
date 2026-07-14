@@ -80,8 +80,8 @@ TYPE_PATTERNS = [
     ("NPM_TOKEN", re.compile(r"\bnpm_[a-z0-9]{36}\b", re.IGNORECASE)),
     ("STRIPE_SECRET", re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,99}\b")),
     ("USER_EMAIL", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
-    ("PHONE_NUMBER", re.compile(r"\b1[3-9]\d{9}\b")),
-    ("NATIONAL_ID", re.compile(r"\b\d{17}[\dXx]\b")),
+    ("PHONE_NUMBER", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")),
+    ("NATIONAL_ID", re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")),
     ("DATABASE_URL", re.compile(r"\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|amqp|jdbc):\/\/[^\s\"']+\b", re.IGNORECASE)),
     ("AWS_ACCESS_KEY", re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")),
     ("AWS_SECRET_KEY", re.compile(r"(?<![A-Za-z0-9\/+=])[A-Za-z0-9\/+=]{40}(?![A-Za-z0-9\/+=])")),
@@ -110,13 +110,13 @@ PII_KEY_VALUE = re.compile(
     r"\b(\s*[:=：]\s*[\"']?)([^\n\r\"']+)"
 )
 SECRET_KEY_VALUE = re.compile(
-    r"(?i)\b([a-z_][a-z0-9_-]*|数据库地址|数据库连接串|云凭据|云密钥|访问密钥|连接字符串)"
+    r"(?i)\b([a-z_\u4e00-\u9fff][a-z0-9_.\-\u4e00-\u9fff]*)"
     r"\b(\s*[:=：]\s*[\"']?)([^\n\r\"']+)"
 )
 
 
 def normalize_key_name(key_name: str) -> str:
-    return key_name.lower().replace("-", "").replace("_", "").replace(" ", "")
+    return re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", key_name.lower())
 
 
 def pii_label_for_key(key_name: str) -> str | None:
@@ -134,6 +134,10 @@ def pii_label_for_key(key_name: str) -> str | None:
 def secret_label_for_key(key_name: str, value: str) -> str | None:
     normalized = normalize_key_name(key_name)
 
+    if normalized in {"authorization", "authheader"}:
+        return "AUTH_TOKEN"
+    if normalized in {"cookie", "setcookie", "cookieheader", "sessioncookie"}:
+        return "COOKIE_HEADER"
     if normalized in {"privatekey", "private_key"}:
         return "PRIVATE_KEY"
     if normalized in {"awsaccesskeyid"}:
@@ -179,6 +183,8 @@ def redact_string(text: str, token_map: dict[str, str]) -> str:
 
     def replace_secret_key_value(match):
         label = secret_label_for_key(match.group(1), match.group(3).strip())
+        if not label and is_sensitive_key(match.group(1)):
+            label = "SENSITIVE_SECRET"
         if not label:
             return match.group(0)
         return f"{match.group(1)}{match.group(2)}{replace_with_token(label, match.group(3).strip())}"

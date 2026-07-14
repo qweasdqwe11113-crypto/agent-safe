@@ -27,6 +27,47 @@ class RedactScriptTests(unittest.TestCase):
         self.assertIn("[PHONE_NUMBER_", stdout)
         self.assertIn("[SENSITIVE_SECRET_", stdout)
 
+    def test_phone_and_id_are_redacted_next_to_chinese_text(self) -> None:
+        result = self.run_script("我的电话是13751973809，身份证是440305199901011234。")
+        self.assertIn("我的电话是[PHONE_NUMBER_", result.stdout)
+        self.assertIn("身份证是[NATIONAL_ID_", result.stdout)
+
+    def test_generic_sensitive_key_names_are_redacted(self) -> None:
+        payload = (
+            "OPENAI_API_KEY=short-openai-value\n"
+            "GITHUB_TOKEN=short-github-value\n"
+            "DB_PASSWORD=supersecret\n"
+            "spring.datasource.password=database-password\n"
+            "Authorization=Bearer abc.def.ghi\n"
+            "Cookie=sessionid=abc123\n"
+            "用户密码=中文密码值\n"
+            "API密钥：中文密钥值\n"
+            "访问令牌=中文令牌值\n"
+        )
+        result = self.run_script(payload)
+        self.assertNotIn("short-openai-value", result.stdout)
+        self.assertNotIn("short-github-value", result.stdout)
+        self.assertNotIn("supersecret", result.stdout)
+        self.assertNotIn("database-password", result.stdout)
+        self.assertNotIn("Bearer abc.def.ghi", result.stdout)
+        self.assertNotIn("sessionid=abc123", result.stdout)
+        self.assertNotIn("中文密码值", result.stdout)
+        self.assertNotIn("中文密钥值", result.stdout)
+        self.assertNotIn("中文令牌值", result.stdout)
+        self.assertIn("[AUTH_TOKEN_", result.stdout)
+        self.assertIn("[COOKIE_HEADER_", result.stdout)
+
+    def test_similar_non_sensitive_key_names_are_not_redacted(self) -> None:
+        payload = (
+            "author=Alice\n"
+            "tokenizer=cl100k_base\n"
+            "authentication_method=oauth\n"
+            "密钥算法=AES256\n"
+            "授权方式=oauth\n"
+        )
+        result = self.run_script(payload)
+        self.assertEqual(result.stdout, payload)
+
     def test_json_recursive_redaction(self) -> None:
         payload = json.dumps(
             {

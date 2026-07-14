@@ -1,8 +1,51 @@
 #!/usr/bin/env python3
 import hashlib
+import re
 
 
-SENSITIVE_KEYS = ("apikey", "api_key", "secret", "password", "token", "auth", "credential")
+SENSITIVE_KEY_MARKERS = (
+    "apikey",
+    "accesskey",
+    "secretkey",
+    "privatekey",
+    "clientsecret",
+    "password",
+    "passwd",
+    "credential",
+    "cookie",
+    "sessionid",
+)
+
+SENSITIVE_KEY_EXACT = {
+    "api_key",
+    "apikey",
+    "auth",
+    "authorization",
+    "cookie",
+    "credential",
+    "credentials",
+    "passwd",
+    "password",
+    "private_key",
+    "secret",
+    "session_id",
+    "sessionid",
+    "token",
+    "凭据",
+    "口令",
+    "密码",
+    "密钥",
+    "授权",
+    "私钥",
+    "秘钥",
+    "令牌",
+}
+
+SENSITIVE_KEY_EXACT_COMPACT = {
+    re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", key) for key in SENSITIVE_KEY_EXACT
+}
+
+SENSITIVE_KEY_ZH_SUFFIXES = ("密码", "口令", "令牌", "密钥", "秘钥", "凭据", "私钥")
 
 
 def token_hash(value: str) -> str:
@@ -14,6 +57,10 @@ def make_token(label: str, value: str) -> str:
 
 
 def is_sensitive_key(key_name: str) -> bool:
-    normalized = key_name.lower().replace("-", "").replace("_", "")
-    return any(part.replace("_", "") in normalized for part in SENSITIVE_KEYS)
-
+    lowered = key_name.strip().lower()
+    compact = re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", lowered)
+    if lowered in SENSITIVE_KEY_EXACT or compact in SENSITIVE_KEY_EXACT_COMPACT:
+        return True
+    if any(marker in compact for marker in SENSITIVE_KEY_MARKERS):
+        return True
+    return compact.endswith(("secret", "token", "auth", "pwd", *SENSITIVE_KEY_ZH_SUFFIXES))
