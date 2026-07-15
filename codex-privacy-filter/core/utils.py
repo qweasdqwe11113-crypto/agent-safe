@@ -10,6 +10,8 @@ SENSITIVE_KEY_MARKERS = (
     "privatekey",
     "clientsecret",
     "password",
+    "passcode",
+    "pin",
     "passwd",
     "credential",
     "cookie",
@@ -31,6 +33,7 @@ SENSITIVE_KEY_EXACT = {
     "session_id",
     "sessionid",
     "token",
+    "otp",
     "凭据",
     "口令",
     "密码",
@@ -39,6 +42,7 @@ SENSITIVE_KEY_EXACT = {
     "私钥",
     "秘钥",
     "令牌",
+    "验证码",
 }
 
 SENSITIVE_KEY_EXACT_COMPACT = {

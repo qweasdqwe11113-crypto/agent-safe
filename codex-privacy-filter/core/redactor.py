@@ -32,6 +32,38 @@ ADDRESS_FIELD_KEYS = (
     "地址",
 )
 
+PHONE_FIELD_KEYS = (
+    "phone",
+    "phone_number",
+    "mobile",
+    "mobile_phone",
+    "telephone",
+    "tel",
+    "contact_phone",
+    "手机",
+    "手机号",
+    "电话",
+    "电话号码",
+    "联系电话",
+)
+
+PAYMENT_CARD_FIELD_KEYS = (
+    "card",
+    "card_number",
+    "card_no",
+    "bank_card",
+    "bank_card_number",
+    "credit_card",
+    "credit_card_number",
+    "debit_card",
+    "debit_card_number",
+    "银行卡",
+    "银行卡号",
+    "卡号",
+    "信用卡号",
+    "借记卡号",
+)
+
 ID_FIELD_KEYS = (
     "id_number",
     "national_id",
@@ -74,37 +106,96 @@ CLOUD_CREDENTIAL_FIELD_KEYS = (
 )
 
 TYPE_PATTERNS = [
-    ("OPENAI_KEY", re.compile(r"(?i)\bsk-[a-z0-9]{20,}\b")),
-    ("ANTHROPIC_KEY", re.compile(r"\bsk-ant-[a-zA-Z0-9_-]{20,}\b")),
-    ("GITHUB_TOKEN", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
-    ("NPM_TOKEN", re.compile(r"\bnpm_[a-z0-9]{36}\b", re.IGNORECASE)),
-    ("STRIPE_SECRET", re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,99}\b")),
+    ("ANTHROPIC_KEY", re.compile(r"(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")),
+    (
+        "OPENAI_KEY",
+        re.compile(r"(?i)(?<![a-z0-9_-])sk-(?:(?:proj|svcacct)-)?[a-z0-9][a-z0-9_-]{19,}(?![a-z0-9_-])"),
+    ),
+    ("GITHUB_TOKEN", re.compile(r"(?<![A-Za-z0-9_])gh[pousr]_[A-Za-z0-9]{20,}(?![A-Za-z0-9_])")),
+    ("GITLAB_TOKEN", re.compile(r"(?<![A-Za-z0-9_-])glpat-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")),
+    ("NPM_TOKEN", re.compile(r"(?<![A-Za-z0-9_])npm_[a-z0-9]{36}(?![A-Za-z0-9_])", re.IGNORECASE)),
+    ("PYPI_TOKEN", re.compile(r"(?<![A-Za-z0-9_-])pypi-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])")),
+    ("HUGGINGFACE_TOKEN", re.compile(r"(?<![A-Za-z0-9_])hf_[A-Za-z0-9]{20,}(?![A-Za-z0-9_])")),
+    ("GOOGLE_API_KEY", re.compile(r"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}(?![A-Za-z0-9_-])")),
+    ("SLACK_TOKEN", re.compile(r"(?<![A-Za-z0-9_-])(?:xox[abprs]|xapp)-[A-Za-z0-9-]{10,}(?![A-Za-z0-9-])")),
+    (
+        "SLACK_WEBHOOK",
+        re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+"),
+    ),
+    (
+        "JWT_TOKEN",
+        re.compile(
+            r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}(?![A-Za-z0-9_-])"
+        ),
+    ),
+    ("TELEGRAM_BOT_TOKEN", re.compile(r"(?<!\d)\d{8,12}:[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])")),
+    (
+        "SENDGRID_KEY",
+        re.compile(r"(?<![A-Za-z0-9_-])SG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])"),
+    ),
+    (
+        "STRIPE_SECRET",
+        re.compile(r"(?<![A-Za-z0-9_])(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,99}(?![A-Za-z0-9_])"),
+    ),
+    (
+        "DATABASE_URL",
+        re.compile(
+            r"(?<![A-Za-z0-9+.-])(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|amqp|jdbc):\/\/[^\s\"'<>，。！？；、,;）)\]】}]+",
+            re.IGNORECASE,
+        ),
+    ),
     ("USER_EMAIL", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
     ("PHONE_NUMBER", re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)")),
+    (
+        "PHONE_NUMBER",
+        re.compile(r"(?<![A-Za-z0-9])\+[1-9]\d{0,2}(?:[ .-]?\(?\d{1,4}\)?){2,5}(?![A-Za-z0-9])"),
+    ),
+    (
+        "PHONE_NUMBER",
+        re.compile(r"(?<![A-Za-z0-9])(?:\(\d{2,4}\)|\d{2,4})[ .-]\d{3,4}[ .-]\d{4}(?![A-Za-z0-9])"),
+    ),
     ("NATIONAL_ID", re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")),
-    ("DATABASE_URL", re.compile(r"\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|amqp|jdbc):\/\/[^\s\"']+\b", re.IGNORECASE)),
-    ("AWS_ACCESS_KEY", re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")),
+    ("AWS_ACCESS_KEY", re.compile(r"(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])")),
     ("AWS_SECRET_KEY", re.compile(r"(?<![A-Za-z0-9\/+=])[A-Za-z0-9\/+=]{40}(?![A-Za-z0-9\/+=])")),
-    ("AZURE_CONN_STRING", re.compile(r"\bDefaultEndpointsProtocol=https;AccountName=[^;\s]+;AccountKey=[^;\s]+(?:;EndpointSuffix=[^;\s]+)?", re.IGNORECASE)),
-    ("COOKIE_HEADER", re.compile(r"(?i)\b(?:cookie|set-cookie)\s*:\s*[^\n\r]+")),
-    ("INTERNAL_ENDPOINT", re.compile(r"(?i)\bhttps?:\/\/(?:localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|[A-Za-z0-9._-]+(?:\.local|\.internal|\.corp))(?:[:\/][^\s\"']*)?")),
-    ("STACK_TRACE_PATH", re.compile(r"(?i)\b(?:[A-Z]:\\[^:\n\r]+|\/(?:home|Users|var|opt|srv|etc)\/[^\s:\n\r]+)")),
-    ("IPV4_ADDRESS", re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")),
-    ("IPV6_ADDRESS", re.compile(r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b")),
-    ("PAYMENT_CARD", re.compile(r"\b(?:\d[ -]*?){13,16}\b")),
+    (
+        "AZURE_CONN_STRING",
+        re.compile(
+            r"(?<![A-Za-z0-9])DefaultEndpointsProtocol=https;AccountName=[^;\s]+;AccountKey=[^;\s]+(?:;EndpointSuffix=[^;\s]+)?",
+            re.IGNORECASE,
+        ),
+    ),
+    ("COOKIE_HEADER", re.compile(r"(?i)(?<![A-Za-z0-9_-])(?:cookie|set-cookie)\s*:\s*[^\n\r]+")),
+    (
+        "INTERNAL_ENDPOINT",
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9+.-])https?:\/\/(?:localhost|127\.0\.0\.1|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|[A-Za-z0-9._-]+(?:\.local|\.internal|\.corp))(?:[:\/][^\s\"'<>，。！？；、,;）)\]】}]*)?"
+        ),
+    ),
+    (
+        "STACK_TRACE_PATH",
+        re.compile(
+            r"(?i)(?<![A-Za-z0-9_])(?:[A-Z]:\\[^:\n\r，。；;]+|\/(?:home|Users|var|opt|srv|etc)\/[^\s:\n\r，。；;]+)"
+        ),
+    ),
+    ("IPV4_ADDRESS", re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d.])")),
+    ("IPV6_ADDRESS", re.compile(r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])")),
+    ("PAYMENT_CARD", re.compile(r"(?<![A-Za-z0-9])(?:\d[ -]?){12,15}\d(?![A-Za-z0-9])")),
     (
         "PRIVATE_KEY",
         re.compile(
             r"-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY-----[\s\S]{64,}?-----END[ A-Z0-9_-]{0,100}PRIVATE KEY-----"
         ),
     ),
-    ("GENERIC_TOKEN", re.compile(r"(?i)\b[A-Z0-9]{20,}[_-]?[A-Z0-9]{10,}\b")),
+    (
+        "GENERIC_TOKEN",
+        re.compile(r"(?i)(?<![A-Z0-9_-])[A-Z0-9]{20,}[_-]?[A-Z0-9]{10,}(?![A-Z0-9_-])"),
+    ),
 ]
 
 KEY_VALUE_SECRET = re.compile(
     r"(?i)\b(api[_-]?key|secret|token|passwd|password)\b(\s*[:=]\s*[\"']?)([^\s\"']+)"
 )
-AUTH_BEARER = re.compile(r"(?i)\b(authorization\s*:\s*bearer\s+)([^\s]+)")
+AUTH_BEARER = re.compile(r"(?i)(?<![A-Za-z0-9_-])(authorization\s*:\s*bearer\s+)([^\s]+)")
 PII_KEY_VALUE = re.compile(
     r"(?i)\b([a-z_][a-z0-9_-]*|姓名|联系人|收件人|详细地址|收货地址|家庭住址|住址|地址|身份证|身份证号|证件号|证件号码|护照号)"
     r"\b(\s*[:=：]\s*[\"']?)([^\n\r\"']+)"
@@ -122,12 +213,16 @@ def normalize_key_name(key_name: str) -> str:
 def pii_label_for_key(key_name: str) -> str | None:
     normalized = normalize_key_name(key_name)
 
+    if any(normalize_key_name(candidate) in normalized for candidate in PHONE_FIELD_KEYS):
+        return "PHONE_NUMBER"
     if any(normalize_key_name(candidate) in normalized for candidate in NAME_FIELD_KEYS):
         return "PERSON_NAME"
     if any(normalize_key_name(candidate) in normalized for candidate in ADDRESS_FIELD_KEYS):
         return "STREET_ADDRESS"
     if any(normalize_key_name(candidate) in normalized for candidate in ID_FIELD_KEYS):
         return "NATIONAL_ID"
+    if any(normalize_key_name(candidate) in normalized for candidate in PAYMENT_CARD_FIELD_KEYS):
+        return "PAYMENT_CARD"
     return None
 
 
@@ -215,8 +310,27 @@ def redact_content(node, token_map: dict[str, str], key_name: str | None = None)
             return token
         return redact_string(node, token_map)
 
+    if isinstance(node, (int, float)) and not isinstance(node, bool):
+        value = str(node)
+        pii_label = pii_label_for_key(key_name) if key_name else None
+        if pii_label:
+            token = make_token(pii_label, value)
+            token_map[token] = value
+            return token
+        secret_label = secret_label_for_key(key_name, value) if key_name else None
+        if secret_label:
+            token = make_token(secret_label, value)
+            token_map[token] = value
+            return token
+        if key_name and is_sensitive_key(key_name):
+            token = make_token("SENSITIVE_SECRET", value)
+            token_map[token] = value
+            return token
+        redacted_value = redact_string(value, token_map)
+        return redacted_value if redacted_value != value else node
+
     if isinstance(node, list):
-        return [redact_content(item, token_map) for item in node]
+        return [redact_content(item, token_map, key_name) for item in node]
 
     if isinstance(node, dict):
         return {key: redact_content(value, token_map, key) for key, value in node.items()}

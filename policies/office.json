@@ -3,7 +3,7 @@
   "title": "办公与客服场景隐私模板",
   "description": "在保留总结和支持任务所需上下文的同时，保护联系人信息、工单、会议纪要和办公文档。",
   "block_categories": ["secret", "file"],
-  "mask_categories": ["pii", "network"],
+  "mask_categories": ["pii", "network", "finance"],
   "sample_inputs": [
     {
       "title": "客户联系人摘要",

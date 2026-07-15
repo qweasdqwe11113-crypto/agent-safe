@@ -3,7 +3,7 @@
   "title": "代码场景隐私模板",
   "description": "在开发环境内容离开本机之前，保护代码仓库、密钥、内部接口和调试产物。",
   "block_categories": ["secret", "file"],
-  "mask_categories": ["pii", "network"],
+  "mask_categories": ["pii", "network", "finance"],
   "sample_inputs": [
     {
       "title": "Secret in dotenv",
