@@ -13,6 +13,7 @@ from typing import Any
 
 SESSION_KEYS = ("conversation_id", "session_id", "thread_id", "prompt_cache_key")
 SESSION_HEADERS = (
+    "x-opencode-session-id",
     "x-codex-thread-id",
     "x-codex-session-id",
     "x-session-id",
@@ -159,6 +160,7 @@ class GatewayTraceStore:
         token_map: dict[str, str],
         action: str,
         headers: dict[str, str],
+        review: dict | None = None,
     ) -> dict:
         with self.lock:
             identity, label = self._session_identity(original_payload, headers, route)
@@ -191,6 +193,7 @@ class GatewayTraceStore:
                 "response_restored": str(trace_dir / "response-restored.json"),
                 "stream_raw": str(trace_dir / "stream-raw.jsonl"),
                 "stream_restored": str(trace_dir / "stream-restored.jsonl"),
+                "review_decision": str(trace_dir / "review-decision.json"),
             }
             Path(artifacts["request_original"]).write_text(
                 json.dumps(original_payload, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -201,6 +204,17 @@ class GatewayTraceStore:
             Path(artifacts["token_map"]).write_text(
                 json.dumps(token_map, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+            decision = {
+                "review_id": (review or {}).get("review_id", ""),
+                "suggested_action": (review or {}).get("suggested_action", action),
+                "final_action": action,
+                "risk_level": (review or {}).get("risk_level", ""),
+                "is_override": bool((review or {}).get("is_override", False)),
+                "override_reason": (review or {}).get("override_reason", ""),
+            }
+            Path(artifacts["review_decision"]).write_text(
+                json.dumps(decision, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
             trace = {
                 "trace_id": trace_id,
@@ -210,6 +224,7 @@ class GatewayTraceStore:
                 "model": original_payload.get("model", ""),
                 "stream": original_payload.get("stream") is True,
                 "action": action,
+                **decision,
                 "status": "in_progress",
                 "original_text": extract_latest_user_text(original_payload, route),
                 "sent_text": extract_latest_user_text(sanitized_payload, route),

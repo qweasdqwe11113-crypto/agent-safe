@@ -5,6 +5,7 @@ import argparse
 import copy
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -16,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any
 
 from guard_core import (
@@ -25,12 +27,14 @@ from guard_core import (
     apply_final_action,
     build_preview,
     get_policy_templates_summary,
+    label_display_name,
     restore_response,
     scan_file_bytes,
     scan_text,
+    summarize_findings,
 )
 from model_client import ModelClient, ModelClientError
-from gateway_trace import GatewayTraceStore, extract_chat_text, extract_responses_text
+from gateway_trace import GatewayTraceStore, extract_chat_text, extract_latest_user_text, extract_responses_text
 from session_state import SessionState, TurnRecord, append_turn, load_session, save_session_log
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -68,6 +72,128 @@ class SessionStore:
 
     def pop_preview(self, preview_id: str) -> dict | None:
         return self.pending_previews.pop(preview_id, None)
+
+    def get_preview(self, preview_id: str) -> dict | None:
+        return self.pending_previews.get(preview_id)
+
+
+class ReviewCoordinator:
+    def __init__(self, timeout_seconds: int = 900) -> None:
+        self.timeout_seconds = timeout_seconds
+        self.lock = threading.RLock()
+        self.reviews: dict[str, dict] = {}
+        self.events: dict[str, threading.Event] = {}
+
+    def create_review(
+        self,
+        *,
+        route: str,
+        model: str,
+        profile: str,
+        original_text: str,
+        redacted_text: str,
+        suggested_action: str,
+        risk_level: str,
+        findings: list[dict[str, object]],
+        session_label: str,
+    ) -> dict:
+        review_id = uuid.uuid4().hex
+        review = {
+            "review_id": review_id,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "route": route,
+            "model": model,
+            "profile": profile,
+            "session_label": session_label,
+            "original_text": original_text,
+            "redacted_text": redacted_text,
+            "suggested_action": suggested_action,
+            "risk_level": risk_level,
+            "findings": findings,
+            "status": "pending",
+            "final_action": "",
+            "is_override": False,
+            "override_reason": "",
+            "cloud_response": "",
+            "restored_response": "",
+            "error": "",
+        }
+        with self.lock:
+            self.reviews[review_id] = review
+            self.events[review_id] = threading.Event()
+        return review.copy()
+
+    def list_reviews(self) -> list[dict]:
+        with self.lock:
+            reviews = [review.copy() for review in self.reviews.values()]
+        return sorted(reviews, key=lambda item: item["created_at"], reverse=True)
+
+    def get_review(self, review_id: str) -> dict | None:
+        with self.lock:
+            review = self.reviews.get(review_id)
+            return review.copy() if review else None
+
+    def decide(self, review_id: str, final_action: str, override_reason: str) -> tuple[dict | None, str | None]:
+        with self.lock:
+            review = self.reviews.get(review_id)
+            if review is None:
+                return None, "Review not found"
+            if review["status"] != "pending":
+                return None, "Review has already been decided"
+            is_override = final_action != review["suggested_action"]
+            if is_override and not override_reason:
+                return None, "override_reason is required when final_action differs from suggested_action"
+            review.update(
+                {
+                    "updated_at": datetime.now().isoformat(timespec="seconds"),
+                    "status": "approved",
+                    "final_action": final_action,
+                    "is_override": is_override,
+                    "override_reason": override_reason,
+                }
+            )
+            self.events[review_id].set()
+            return review.copy(), None
+
+    def wait_for_decision(self, review_id: str) -> dict | None:
+        with self.lock:
+            event = self.events.get(review_id)
+        if event is None or not event.wait(self.timeout_seconds):
+            self.complete_review(review_id, status="expired", error="Review confirmation timed out")
+            return None
+        return self.get_review(review_id)
+
+    def mark_sending(self, review_id: str) -> None:
+        with self.lock:
+            review = self.reviews.get(review_id)
+            if review:
+                review["status"] = "sending"
+                review["updated_at"] = datetime.now().isoformat(timespec="seconds")
+
+    def complete_review(
+        self,
+        review_id: str | None,
+        *,
+        status: str,
+        cloud_response: str = "",
+        restored_response: str = "",
+        error: str = "",
+    ) -> None:
+        if review_id is None:
+            return
+        with self.lock:
+            review = self.reviews.get(review_id)
+            if review:
+                review.update(
+                    {
+                        "updated_at": datetime.now().isoformat(timespec="seconds"),
+                        "status": status,
+                        "cloud_response": cloud_response,
+                        "restored_response": restored_response,
+                        "error": error,
+                    }
+                )
 
 
 class GatewayClientError(RuntimeError):
@@ -555,6 +681,33 @@ def build_action_options(scan_result) -> dict:
     }
 
 
+def build_findings(scan_result: ScanResult) -> list[dict[str, object]]:
+    return [
+        {
+            "label": label,
+            "display_name": label_display_name(label),
+            "count": count,
+        }
+        for label, count in summarize_findings(scan_result.token_map)
+    ]
+
+
+def build_review_payload(scan_result: ScanResult) -> dict:
+    return {
+        "profile": scan_result.profile,
+        "original_text": scan_result.original_text,
+        "redacted_text": scan_result.redacted_text,
+        "token_map": scan_result.token_map,
+        "findings": build_findings(scan_result),
+        "suggested_action": scan_result.suggested_action,
+        "risk_level": RISK_LEVELS[scan_result.suggested_action],
+        "suggested_sent_text": apply_final_action(scan_result, scan_result.suggested_action),
+        "action_options": build_action_options(scan_result),
+        "preview_text": build_preview(scan_result),
+        "review_mode": "review-first",
+    }
+
+
 def build_turn_file_paths(session: SessionState, turn_id: int) -> dict[str, Path]:
     prefix = f"turn-{turn_id:03d}"
     return {
@@ -608,6 +761,19 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/reviews":
+            self._write_json(HTTPStatus.OK, {"reviews": self.server.review_coordinator.list_reviews()})
+            return
+
+        if path.startswith("/reviews/"):
+            review_id = path.split("/")[2] if len(path.split("/")) > 2 else ""
+            review = self.server.review_coordinator.get_review(review_id)
+            if review is None:
+                self._write_json(HTTPStatus.NOT_FOUND, {"error": "Review not found"})
+                return
+            self._write_json(HTTPStatus.OK, review)
+            return
+
         if path.startswith("/sessions/"):
             session_id = path.split("/")[2] if len(path.split("/")) > 2 else ""
             session = self.server.session_store.get_session(session_id)
@@ -648,6 +814,31 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             self._handle_create_session(payload)
             return
 
+        if path.startswith("/reviews/") and path.endswith("/decision"):
+            review_id = path.split("/")[2]
+            payload = self._read_json_body()
+            if payload is None:
+                return
+            final_action = payload.get("final_action")
+            if final_action not in {"allow", "mask", "block"}:
+                self._write_json(HTTPStatus.BAD_REQUEST, {"error": "final_action must be allow, mask, or block"})
+                return
+            override_reason = payload.get("override_reason", "")
+            if not isinstance(override_reason, str):
+                self._write_json(HTTPStatus.BAD_REQUEST, {"error": "override_reason must be a string"})
+                return
+            review, error = self.server.review_coordinator.decide(
+                review_id,
+                final_action,
+                override_reason.strip(),
+            )
+            if error:
+                status = HTTPStatus.NOT_FOUND if error == "Review not found" else HTTPStatus.BAD_REQUEST
+                self._write_json(status, {"error": error})
+                return
+            self._write_json(HTTPStatus.OK, review or {})
+            return
+
         if path.startswith("/sessions/") and path.endswith("/preview"):
             session_id = path.split("/")[2]
             payload = self._read_json_body()
@@ -682,6 +873,69 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
 
         self._write_json(HTTPStatus.NOT_FOUND, {"error": "Route not found"})
 
+    def _resolve_gateway_review(
+        self,
+        route: str,
+        original_payload: dict,
+        sanitized_payload: dict,
+        token_map: dict[str, str],
+        automatic_action: str,
+    ) -> dict | None:
+        if self.server.gateway_review_mode != "review-first":
+            return {
+                "payload": sanitized_payload,
+                "token_map": token_map,
+                "action": automatic_action,
+                "review_id": None,
+                "review": None,
+            }
+
+        profile = self.server.gateway_profile
+        original_text = extract_latest_user_text(original_payload, route)
+        redacted_text = extract_latest_user_text(sanitized_payload, route)
+        scan_result = scan_text(original_text, profile)
+        headers = {key.lower(): value for key, value in self._request_headers_dict().items()}
+        session_label = headers.get("x-opencode-session-id", "OpenCode session")
+        review = self.server.review_coordinator.create_review(
+            route=route,
+            model=str(original_payload.get("model", "")),
+            profile=profile,
+            original_text=original_text,
+            redacted_text=redacted_text,
+            suggested_action=scan_result.suggested_action,
+            risk_level=RISK_LEVELS[scan_result.suggested_action],
+            findings=build_findings(scan_result),
+            session_label=session_label,
+        )
+        decision = self.server.review_coordinator.wait_for_decision(review["review_id"])
+        if decision is None:
+            self._write_json(
+                HTTPStatus.REQUEST_TIMEOUT,
+                {"error": "Review confirmation timed out", "review_id": review["review_id"]},
+            )
+            return None
+
+        final_action = decision["final_action"]
+        if final_action == "allow":
+            forwarded_payload = original_payload
+            active_token_map: dict[str, str] = {}
+        elif final_action == "mask":
+            forwarded_payload = sanitized_payload
+            active_token_map = token_map
+        else:
+            forwarded_payload = sanitized_payload
+            active_token_map = {}
+
+        if final_action != "block":
+            self.server.review_coordinator.mark_sending(review["review_id"])
+        return {
+            "payload": forwarded_payload,
+            "token_map": active_token_map,
+            "action": final_action,
+            "review_id": review["review_id"],
+            "review": decision,
+        }
+
     def _handle_gateway_responses(self, payload: dict) -> None:
         if payload.get("stream") is True:
             self._handle_gateway_responses_stream(payload)
@@ -689,8 +943,15 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
 
         profile = self.server.gateway_profile
         sanitized_payload, token_map, action = sanitize_responses_payload(payload, profile)
+        resolved = self._resolve_gateway_review("/responses", payload, sanitized_payload, token_map, action)
+        if resolved is None:
+            return
+        sanitized_payload = resolved["payload"]
+        token_map = resolved["token_map"]
+        action = resolved["action"]
+        review_id = resolved["review_id"]
         trace = self.server.trace_store.start_trace(
-            "/responses", payload, sanitized_payload, token_map, action, self._request_headers_dict()
+            "/responses", payload, sanitized_payload, token_map, action, self._request_headers_dict(), resolved["review"]
         )
         if action == "block":
             blocked_payload = build_blocked_responses_payload(payload.get("model"))
@@ -703,6 +964,12 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 upstream_status=200,
                 status="blocked",
                 response_id=blocked_payload.get("id"),
+            )
+            self.server.review_coordinator.complete_review(
+                review_id,
+                status="blocked",
+                cloud_response=extract_responses_text(blocked_payload),
+                restored_response=extract_responses_text(blocked_payload),
             )
             self._write_json(
                 HTTPStatus.OK,
@@ -719,6 +986,7 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             )
         except GatewayClientError as exc:
             self.server.trace_store.complete_trace(trace, status="error", error=str(exc))
+            self.server.review_coordinator.complete_review(review_id, status="error", error=str(exc))
             self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
             return
 
@@ -733,6 +1001,12 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             status="completed" if status < 400 else "error",
             response_id=upstream_payload.get("id"),
         )
+        self.server.review_coordinator.complete_review(
+            review_id,
+            status="completed" if status < 400 else "error",
+            cloud_response=extract_responses_text(upstream_payload),
+            restored_response=extract_responses_text(restored_payload),
+        )
         self._write_json(
             HTTPStatus(status),
             restored_payload,
@@ -746,8 +1020,15 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
 
         profile = self.server.gateway_profile
         sanitized_payload, token_map, action = sanitize_chat_completions_payload(payload, profile)
+        resolved = self._resolve_gateway_review("/chat/completions", payload, sanitized_payload, token_map, action)
+        if resolved is None:
+            return
+        sanitized_payload = resolved["payload"]
+        token_map = resolved["token_map"]
+        action = resolved["action"]
+        review_id = resolved["review_id"]
         trace = self.server.trace_store.start_trace(
-            "/chat/completions", payload, sanitized_payload, token_map, action, self._request_headers_dict()
+            "/chat/completions", payload, sanitized_payload, token_map, action, self._request_headers_dict(), resolved["review"]
         )
         if action == "block":
             blocked_payload = build_blocked_chat_completions_payload(payload.get("model"))
@@ -760,6 +1041,12 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 upstream_status=200,
                 status="blocked",
                 response_id=blocked_payload.get("id"),
+            )
+            self.server.review_coordinator.complete_review(
+                review_id,
+                status="blocked",
+                cloud_response=extract_chat_text(blocked_payload),
+                restored_response=extract_chat_text(blocked_payload),
             )
             self._write_json(
                 HTTPStatus.OK,
@@ -776,6 +1063,7 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             )
         except GatewayClientError as exc:
             self.server.trace_store.complete_trace(trace, status="error", error=str(exc))
+            self.server.review_coordinator.complete_review(review_id, status="error", error=str(exc))
             self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
             return
 
@@ -790,6 +1078,12 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             status="completed" if status < 400 else "error",
             response_id=upstream_payload.get("id"),
         )
+        self.server.review_coordinator.complete_review(
+            review_id,
+            status="completed" if status < 400 else "error",
+            cloud_response=extract_chat_text(upstream_payload),
+            restored_response=extract_chat_text(restored_payload),
+        )
         self._write_json(
             HTTPStatus(status),
             restored_payload,
@@ -799,8 +1093,15 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
     def _handle_gateway_responses_stream(self, payload: dict) -> None:
         profile = self.server.gateway_profile
         sanitized_payload, token_map, action = sanitize_responses_payload(payload, profile)
+        resolved = self._resolve_gateway_review("/responses", payload, sanitized_payload, token_map, action)
+        if resolved is None:
+            return
+        sanitized_payload = resolved["payload"]
+        token_map = resolved["token_map"]
+        action = resolved["action"]
+        review_id = resolved["review_id"]
         trace = self.server.trace_store.start_trace(
-            "/responses", payload, sanitized_payload, token_map, action, self._request_headers_dict()
+            "/responses", payload, sanitized_payload, token_map, action, self._request_headers_dict(), resolved["review"]
         )
         if action == "block":
             events = build_blocked_responses_stream_events(payload.get("model"))
@@ -820,6 +1121,12 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 upstream_status=200,
                 status="blocked",
                 response_id=completed.get("id"),
+            )
+            self.server.review_coordinator.complete_review(
+                review_id,
+                status="blocked",
+                cloud_response=reply,
+                restored_response=reply,
             )
             return
 
@@ -842,6 +1149,12 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                     status="completed" if stream_result["completed"] else "incomplete",
                     response_id=stream_result["response_id"],
                 )
+                self.server.review_coordinator.complete_review(
+                    review_id,
+                    status="completed" if stream_result["completed"] else "incomplete",
+                    cloud_response=stream_result["raw_reply"],
+                    restored_response=stream_result["restored_reply"],
+                )
         except GatewayHTTPError as exc:
             self.server.trace_store.complete_trace(
                 trace,
@@ -851,16 +1164,25 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 status="error",
                 error=str(exc),
             )
+            self.server.review_coordinator.complete_review(review_id, status="error", error=str(exc))
             self._write_json(HTTPStatus(exc.status_code), exc.payload)
         except GatewayClientError as exc:
             self.server.trace_store.complete_trace(trace, status="error", error=str(exc))
+            self.server.review_coordinator.complete_review(review_id, status="error", error=str(exc))
             self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
 
     def _handle_gateway_chat_completions_stream(self, payload: dict) -> None:
         profile = self.server.gateway_profile
         sanitized_payload, token_map, action = sanitize_chat_completions_payload(payload, profile)
+        resolved = self._resolve_gateway_review("/chat/completions", payload, sanitized_payload, token_map, action)
+        if resolved is None:
+            return
+        sanitized_payload = resolved["payload"]
+        token_map = resolved["token_map"]
+        action = resolved["action"]
+        review_id = resolved["review_id"]
         trace = self.server.trace_store.start_trace(
-            "/chat/completions", payload, sanitized_payload, token_map, action, self._request_headers_dict()
+            "/chat/completions", payload, sanitized_payload, token_map, action, self._request_headers_dict(), resolved["review"]
         )
         if action == "block":
             blocked_payload = build_blocked_chat_completions_payload(payload.get("model"))
@@ -878,6 +1200,12 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 upstream_status=200,
                 status="blocked",
                 response_id=blocked_payload.get("id"),
+            )
+            self.server.review_coordinator.complete_review(
+                review_id,
+                status="blocked",
+                cloud_response=reply,
+                restored_response=reply,
             )
             return
 
@@ -900,6 +1228,12 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                     status="completed" if stream_result["completed"] else "incomplete",
                     response_id=stream_result["response_id"],
                 )
+                self.server.review_coordinator.complete_review(
+                    review_id,
+                    status="completed" if stream_result["completed"] else "incomplete",
+                    cloud_response=stream_result["raw_reply"],
+                    restored_response=stream_result["restored_reply"],
+                )
         except GatewayHTTPError as exc:
             self.server.trace_store.complete_trace(
                 trace,
@@ -909,9 +1243,11 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 status="error",
                 error=str(exc),
             )
+            self.server.review_coordinator.complete_review(review_id, status="error", error=str(exc))
             self._write_json(HTTPStatus(exc.status_code), exc.payload)
         except GatewayClientError as exc:
             self.server.trace_store.complete_trace(trace, status="error", error=str(exc))
+            self.server.review_coordinator.complete_review(review_id, status="error", error=str(exc))
             self._write_json(HTTPStatus.BAD_GATEWAY, {"error": str(exc)})
 
     def _handle_create_session(self, payload: dict) -> None:
@@ -935,17 +1271,7 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         scan_result = scan_text(message, session.profile)
-        preview_payload = {
-            "message": message,
-            "profile": session.profile,
-            "original_text": scan_result.original_text,
-            "redacted_text": scan_result.redacted_text,
-            "token_map": scan_result.token_map,
-            "suggested_action": scan_result.suggested_action,
-            "risk_level": RISK_LEVELS[scan_result.suggested_action],
-            "suggested_sent_text": apply_final_action(scan_result, scan_result.suggested_action),
-            "preview_text": build_preview(scan_result),
-        }
+        preview_payload = {"message": message, **build_review_payload(scan_result)}
         preview_id = self.server.session_store.save_preview(session_id, preview_payload)
 
         self._write_json(
@@ -980,14 +1306,7 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
         scan_result = scan_file_bytes(file_name, file_bytes, session.profile)
         preview_payload = {
             "message": f"[file] {file_name}",
-            "profile": session.profile,
-            "original_text": scan_result.original_text,
-            "redacted_text": scan_result.redacted_text,
-            "token_map": scan_result.token_map,
-            "suggested_action": scan_result.suggested_action,
-            "risk_level": RISK_LEVELS[scan_result.suggested_action],
-            "suggested_sent_text": apply_final_action(scan_result, scan_result.suggested_action),
-            "preview_text": build_preview(scan_result),
+            **build_review_payload(scan_result),
             "file_name": file_name,
             "file_size": len(file_bytes),
             "content_type": file_payload.get("content_type"),
@@ -1018,17 +1337,7 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             return
 
         scan_result = scan_text(message, session.profile)
-        preview_payload = {
-            "message": message,
-            "profile": session.profile,
-            "original_text": scan_result.original_text,
-            "redacted_text": scan_result.redacted_text,
-            "token_map": scan_result.token_map,
-            "suggested_action": scan_result.suggested_action,
-            "risk_level": RISK_LEVELS[scan_result.suggested_action],
-            "suggested_sent_text": apply_final_action(scan_result, scan_result.suggested_action),
-            "preview_text": build_preview(scan_result),
-        }
+        preview_payload = {"message": message, **build_review_payload(scan_result)}
         preview_id = self.server.session_store.save_preview(session_id, preview_payload)
         self._handle_confirm(session_id, {"preview_id": preview_id})
 
@@ -1042,7 +1351,7 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(preview_id, str) or not preview_id.strip():
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": "preview_id must be a non-empty string"})
             return
-        preview_payload = self.server.session_store.pop_preview(preview_id)
+        preview_payload = self.server.session_store.get_preview(preview_id)
         if preview_payload is None:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "Preview not found or already confirmed"})
             return
@@ -1050,8 +1359,27 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": "preview_id does not belong to this session"})
             return
 
-        final_action = preview_payload["suggested_action"]
-        safe_text = preview_payload["suggested_sent_text"]
+        final_action = payload.get("final_action", preview_payload["suggested_action"])
+        if final_action not in {"allow", "mask", "block"}:
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "final_action must be allow, mask, or block"})
+            return
+
+        override_reason = payload.get("override_reason", "")
+        if not isinstance(override_reason, str):
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "override_reason must be a string"})
+            return
+        override_reason = override_reason.strip()
+        is_override = final_action != preview_payload["suggested_action"]
+        if is_override and not override_reason:
+            self._write_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "override_reason is required when final_action differs from suggested_action"},
+            )
+            return
+
+        self.server.session_store.pop_preview(preview_id)
+        action_option = preview_payload["action_options"][final_action]
+        safe_text = action_option["sent_text"]
         turn_id = session.next_turn_id()
         files = build_turn_file_paths(session, turn_id)
         files["user_original"].write_text(preview_payload["original_text"], encoding="utf-8")
@@ -1070,6 +1398,10 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 user_redacted=preview_payload["redacted_text"],
                 suggested_action=preview_payload["suggested_action"],
                 user_sent_text="",
+                final_action=final_action,
+                risk_level=preview_payload["risk_level"],
+                is_override=is_override,
+                override_reason=override_reason,
                 artifacts={
                     "user_original": str(files["user_original"]),
                     **({"token_map": str(files["token_map"])} if token_map else {}),
@@ -1082,6 +1414,11 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                     "session_id": session_id,
                     "turn_id": turn_id,
                     "action": final_action,
+                    "final_action": final_action,
+                    "suggested_action": preview_payload["suggested_action"],
+                    "risk_level": preview_payload["risk_level"],
+                    "is_override": is_override,
+                    "override_reason": override_reason,
                     "blocked": True,
                     "preview_id": preview_id,
                     "preview_text": preview_payload["preview_text"],
@@ -1115,6 +1452,10 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             user_redacted=preview_payload["redacted_text"],
             suggested_action=preview_payload["suggested_action"],
             user_sent_text=safe_text,
+            final_action=final_action,
+            risk_level=preview_payload["risk_level"],
+            is_override=is_override,
+            override_reason=override_reason,
             codex_raw_reply=model_response.reply_text,
             codex_restored_reply=restored_reply,
             token_map_path=str(files["token_map"]) if token_map else None,
@@ -1138,11 +1479,17 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
                 "profile": session.profile,
                 "suggested_action": preview_payload["suggested_action"],
                 "action": final_action,
+                "final_action": final_action,
+                "risk_level": preview_payload["risk_level"],
+                "is_override": is_override,
+                "override_reason": override_reason,
                 "original_text": preview_payload["original_text"],
                 "redacted_text": preview_payload["redacted_text"],
                 "sent_text": safe_text,
                 "assistant_reply": restored_reply,
                 "assistant_raw_reply": model_response.reply_text,
+                "cloud_response": model_response.reply_text,
+                "restored_response": restored_reply,
                 "blocked": False,
                 "artifacts": turn_record.artifacts,
             },
@@ -1381,6 +1728,8 @@ class GuardHTTPServer(ThreadingHTTPServer):
         gateway_client: GatewayClient,
         gateway_profile: str,
         trace_store: GatewayTraceStore | None = None,
+        review_coordinator: ReviewCoordinator | None = None,
+        gateway_review_mode: str = "automatic",
     ):
         super().__init__(server_address, RequestHandlerClass)
         self.session_store = session_store
@@ -1388,6 +1737,8 @@ class GuardHTTPServer(ThreadingHTTPServer):
         self.gateway_client = gateway_client
         self.gateway_profile = gateway_profile
         self.trace_store = trace_store or GatewayTraceStore(session_store.base_dir / "gateway-traces")
+        self.review_coordinator = review_coordinator or ReviewCoordinator()
+        self.gateway_review_mode = gateway_review_mode
 
 
 def parse_args() -> argparse.Namespace:
@@ -1406,6 +1757,8 @@ def main() -> int:
     model_client = ModelClient.from_env()
     gateway_client = GatewayClient.from_env()
     gateway_profile = os.environ.get("APG_GATEWAY_PROFILE", "coding")
+    gateway_review_mode = os.environ.get("APG_GATEWAY_REVIEW_MODE", "review-first")
+    review_timeout_seconds = int(os.environ.get("APG_REVIEW_TIMEOUT_SECONDS", "900"))
     server = GuardHTTPServer(
         (args.host, args.port),
         GuardHTTPRequestHandler,
@@ -1414,11 +1767,14 @@ def main() -> int:
         gateway_client,
         gateway_profile,
         trace_store,
+        ReviewCoordinator(review_timeout_seconds),
+        gateway_review_mode,
     )
     print(f"Agent Privacy Guard API listening on http://{args.host}:{args.port}")
     print(f"Model provider: {model_client.provider} ({model_client.model})")
     print(f"Gateway upstream: {gateway_client.base_url or 'disabled'}")
     print(f"Gateway profile: {gateway_profile}")
+    print(f"Gateway review mode: {gateway_review_mode}")
     print(f"Session output dir: {Path(args.output_dir).resolve()}")
     print(f"Gateway trace dir: {Path(args.trace_dir).resolve()}")
     try:

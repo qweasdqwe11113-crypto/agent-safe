@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -203,6 +204,10 @@ class ServerTests(unittest.TestCase):
         status, preview = self.request_json("POST", "/sessions/demo-session/preview", {"message": "email=test@example.com"})
         self.assertEqual(status, 200)
         self.assertEqual(preview["suggested_action"], "mask")
+        self.assertEqual(preview["risk_level"], "MEDIUM")
+        self.assertEqual(preview["review_mode"], "review-first")
+        self.assertIn("mask", preview["action_options"])
+        self.assertEqual(preview["findings"][0]["label"], "USER_EMAIL")
         self.assertIn("[USER_EMAIL_", preview["redacted_text"])
         self.assertIn("[USER_EMAIL_", preview["suggested_sent_text"])
         self.assertFalse(preview["blocked"])
@@ -221,6 +226,68 @@ class ServerTests(unittest.TestCase):
         status, session_payload = self.request_json("GET", "/sessions/demo-session")
         self.assertEqual(status, 200)
         self.assertEqual(len(session_payload["turns"]), 1)
+
+    def test_confirm_requires_reason_for_override_and_logs_decision(self) -> None:
+        self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "review-session"})
+        _, preview = self.request_json(
+            "POST",
+            "/sessions/review-session/preview",
+            {"message": "email=test@example.com"},
+        )
+
+        status, rejected = self.request_json(
+            "POST",
+            "/sessions/review-session/confirm",
+            {"preview_id": preview["preview_id"], "final_action": "allow"},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("override_reason is required", rejected["error"])
+
+        status, result = self.request_json(
+            "POST",
+            "/sessions/review-session/confirm",
+            {
+                "preview_id": preview["preview_id"],
+                "final_action": "allow",
+                "override_reason": "The address belongs to the public test fixture.",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(result["suggested_action"], "mask")
+        self.assertEqual(result["final_action"], "allow")
+        self.assertTrue(result["is_override"])
+        self.assertEqual(result["sent_text"], "email=test@example.com")
+        self.assertEqual(result["cloud_response"], result["assistant_raw_reply"])
+        self.assertEqual(result["restored_response"], result["assistant_reply"])
+
+        _, session_payload = self.request_json("GET", "/sessions/review-session")
+        turn = session_payload["turns"][0]
+        self.assertEqual(turn["final_action"], "allow")
+        self.assertEqual(turn["risk_level"], "MEDIUM")
+        self.assertTrue(turn["is_override"])
+        self.assertEqual(turn["override_reason"], "The address belongs to the public test fixture.")
+
+    def test_confirm_can_override_to_block_without_calling_model(self) -> None:
+        self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "manual-block"})
+        _, preview = self.request_json(
+            "POST",
+            "/sessions/manual-block/preview",
+            {"message": "hello"},
+        )
+        status, result = self.request_json(
+            "POST",
+            "/sessions/manual-block/confirm",
+            {
+                "preview_id": preview["preview_id"],
+                "final_action": "block",
+                "override_reason": "This turn is not intended for the cloud.",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(result["blocked"])
+        self.assertEqual(result["suggested_action"], "allow")
+        self.assertEqual(result["final_action"], "block")
+        self.assertTrue(result["is_override"])
 
     def test_blocked_message_does_not_call_model(self) -> None:
         self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "blocked-session"})
@@ -254,8 +321,9 @@ class ServerTests(unittest.TestCase):
             body = response.read().decode("utf-8")
         self.assertEqual(response.status, 200)
         self.assertIn("text/html", response.headers.get("Content-Type", ""))
-        self.assertIn("Agent Privacy Guard", body)
-        self.assertIn("真实 Codex 会话", body)
+        self.assertIn("OpenCode Privacy Review", body)
+        self.assertIn("发送前审核", body)
+        self.assertIn("恢复隐私后的最终消息", body)
 
     def test_preview_file_upload(self) -> None:
         self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "file-session"})
@@ -353,6 +421,72 @@ class ServerTests(unittest.TestCase):
         upstream_path, upstream_payload, _ = self.upstream.requests[-1]
         self.assertEqual(upstream_path, "/chat/completions")
         self.assertIn("[USER_EMAIL_", upstream_payload["messages"][-1]["content"])
+
+    def test_review_first_gateway_waits_for_web_decision_and_returns_to_client(self) -> None:
+        self.server.gateway_review_mode = "review-first"
+        result_holder: dict[str, object] = {}
+
+        def send_opencode_request() -> None:
+            result_holder["response"] = self.request_json(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": "test-model",
+                    "messages": [{"role": "user", "content": "email=test@example.com"}],
+                },
+            )
+
+        request_thread = threading.Thread(target=send_opencode_request)
+        request_thread.start()
+
+        review = None
+        for _ in range(50):
+            _, payload = self.request_json("GET", "/reviews")
+            pending = [item for item in payload["reviews"] if item["status"] == "pending"]
+            if pending:
+                review = pending[0]
+                break
+            time.sleep(0.02)
+
+        self.assertIsNotNone(review)
+        assert review is not None
+        self.assertEqual(review["suggested_action"], "mask")
+        self.assertEqual(review["original_text"], "email=test@example.com")
+        self.assertIn("[USER_EMAIL_", review["redacted_text"])
+        self.assertTrue(request_thread.is_alive())
+
+        status, decision = self.request_json(
+            "POST",
+            f"/reviews/{review['review_id']}/decision",
+            {
+                "final_action": "allow",
+                "override_reason": "The email is a public test fixture.",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(decision["status"], "approved")
+
+        request_thread.join(timeout=5)
+        self.assertFalse(request_thread.is_alive())
+        status, client_payload = result_holder["response"]
+        self.assertEqual(status, 200)
+        self.assertEqual(client_payload["choices"][0]["message"]["content"], "reply:email=test@example.com")
+        self.assertEqual(self.upstream.requests[-1][1]["messages"][-1]["content"], "email=test@example.com")
+
+        _, completed_review = self.request_json("GET", f"/reviews/{review['review_id']}")
+        self.assertEqual(completed_review["status"], "completed")
+        self.assertEqual(completed_review["cloud_response"], "reply:email=test@example.com")
+        self.assertEqual(completed_review["restored_response"], "reply:email=test@example.com")
+
+        _, sessions_payload = self.request_json("GET", "/gateway-traces")
+        trace_session_id = sessions_payload["sessions"][0]["session_id"]
+        _, trace_session = self.request_json("GET", f"/gateway-traces/{trace_session_id}")
+        trace = trace_session["traces"][0]
+        self.assertEqual(trace["review_id"], review["review_id"])
+        self.assertEqual(trace["suggested_action"], "mask")
+        self.assertEqual(trace["final_action"], "allow")
+        self.assertTrue(trace["is_override"])
+        self.assertEqual(trace["override_reason"], "The email is a public test fixture.")
 
     def test_gateway_blockable_text_is_masked_and_forwarded(self) -> None:
         before_count = len(self.upstream.requests)

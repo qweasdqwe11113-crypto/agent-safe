@@ -1,0 +1,35 @@
+{
+  "session_id": "codex-71f232355482dedd",
+  "label": "prompt_cache_key: 019f6c18-3543-7370-85c1-259e44d34c2b",
+  "profile": "",
+  "created_at": "2026-07-17T02:02:57",
+  "updated_at": "2026-07-17T02:03:00",
+  "traces": [
+    {
+      "trace_id": "trace-20260717-020257-cdd37724",
+      "created_at": "2026-07-17T02:02:57",
+      "updated_at": "2026-07-17T02:03:00",
+      "route": "/responses",
+      "model": "gpt-5.6-terra",
+      "stream": true,
+      "action": "mask",
+      "status": "completed",
+      "original_text": "你好\n",
+      "sent_text": "你好\n",
+      "assistant_raw_reply": "你好！有什么想一起处理的吗？",
+      "assistant_reply": "你好！有什么想一起处理的吗？",
+      "upstream_status": 200,
+      "error": "",
+      "token_count": 43,
+      "artifacts": {
+        "request_original": "outputs\\gateway-traces\\codex-71f232355482dedd\\trace-20260717-020257-cdd37724\\request-original.json",
+        "request_sanitized": "outputs\\gateway-traces\\codex-71f232355482dedd\\trace-20260717-020257-cdd37724\\request-sanitized.json",
+        "token_map": "outputs\\gateway-traces\\codex-71f232355482dedd\\trace-20260717-020257-cdd37724\\token-map.json",
+        "response_raw": "outputs\\gateway-traces\\codex-71f232355482dedd\\trace-20260717-020257-cdd37724\\response-raw.json",
+        "response_restored": "outputs\\gateway-traces\\codex-71f232355482dedd\\trace-20260717-020257-cdd37724\\response-restored.json",
+        "stream_raw": "outputs\\gateway-traces\\codex-71f232355482dedd\\trace-20260717-020257-cdd37724\\stream-raw.jsonl",
+        "stream_restored": "outputs\\gateway-traces\\codex-71f232355482dedd\\trace-20260717-020257-cdd37724\\stream-restored.jsonl"
+      }
+    }
+  ]
+}

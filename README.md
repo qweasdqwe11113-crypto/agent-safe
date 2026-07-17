@@ -48,6 +48,18 @@ Web / Client
   -> remote model service
 ```
 
+## Review-first 模式
+
+当前交互主流程是 `/preview -> 用户审核 -> /confirm`：
+
+1. `/preview` 返回原文、脱敏文本、检测项、风险等级、系统推荐动作和三种可选动作。
+2. 用户选择最终动作 `allow / mask / block`。
+3. 最终动作与推荐动作不一致时，`override_reason` 必填；服务端会拒绝无理由 override。
+4. `/confirm` 才会真正发送。返回值同时包含 `cloud_response`（云端原始回复）和 `restored_response`（恢复隐私后的最终回复）。
+5. 审计日志记录 `suggested_action`、`final_action`、`risk_level`、`is_override` 和 `override_reason`。
+
+访问 `http://127.0.0.1:8000/debug` 可以使用完整确认界面。该页面分为“发送前审核”和“响应后结果”两个阶段。
+
 ## 当前已实现
 
 - 敏感信息检测与脱敏
@@ -181,7 +193,7 @@ Model provider: rightcode (gpt-5.4)
 
 1. 创建会话
 2. 调用 `/preview` 看原文、脱敏文和三种动作的结果
-3. 调用 `/messages`，系统按策略自动发送、脱敏或阻断
+3. 调用 `/confirm` 提交最终动作，确认后才发送、脱敏或阻断
 
 ### 1. 创建会话
 
@@ -254,7 +266,7 @@ Invoke-RestMethod -Method Get `
 
 ### 6. 说明
 
-当前主线是 `/messages` 自动执行策略；`/preview` 只用于展示和演示。
+`/messages` 仍保留为兼容的自动策略接口；review-first 交互应使用 `/preview` 和 `/confirm`。
 
 ## 输出产物
 

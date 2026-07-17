@@ -14,6 +14,11 @@ class TurnRecord:
     user_redacted: str
     suggested_action: str
     user_sent_text: str
+    final_action: str = ""
+    risk_level: str = ""
+    review_mode: str = "review-first"
+    is_override: bool = False
+    override_reason: str = ""
     codex_raw_reply: str = ""
     codex_restored_reply: str = ""
     token_map_path: str | None = None
