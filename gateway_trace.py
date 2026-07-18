@@ -57,6 +57,18 @@ def extract_latest_user_text(payload: dict, route: str) -> str:
     return ""
 
 
+def extract_current_user_text(payload: dict, route: str) -> str:
+    collection = payload.get("messages") if route == "/chat/completions" else payload.get("input")
+    if isinstance(collection, str):
+        return collection
+    if isinstance(collection, dict):
+        return _content_text(collection.get("content")) if collection.get("role", "user") == "user" else ""
+    if not isinstance(collection, list) or not collection:
+        return ""
+    latest = collection[-1]
+    return _content_text(latest.get("content")) if isinstance(latest, dict) and latest.get("role") == "user" else ""
+
+
 def extract_first_user_text(payload: dict, route: str) -> str:
     collection = payload.get("messages") if route == "/chat/completions" else payload.get("input")
     if isinstance(collection, str):

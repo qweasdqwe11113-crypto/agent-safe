@@ -12,4 +12,39 @@ if (-not $env:APG_NER_BACKEND) {
     $env:APG_NER_BACKEND = "heuristic"
 }
 
-python server.py --host 127.0.0.1 --port 8000
+$reviewUrl = "http://127.0.0.1:8000/debug"
+$serverProcess = Start-Process `
+    -FilePath "python" `
+    -ArgumentList @("server.py", "--host", "127.0.0.1", "--port", "8000") `
+    -NoNewWindow `
+    -PassThru
+
+try {
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        try {
+            $health = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8000/health" -TimeoutSec 1
+            if ($health.StatusCode -eq 200) {
+                break
+            }
+        } catch {
+            Start-Sleep -Milliseconds 250
+        }
+    } while ((Get-Date) -lt $deadline -and -not $serverProcess.HasExited)
+
+    if ($serverProcess.HasExited) {
+        throw "Agent Privacy Guard stopped before the review page became available."
+    }
+    if ((Get-Date) -ge $deadline) {
+        throw "Timed out waiting for Agent Privacy Guard to start."
+    }
+
+    Start-Process $reviewUrl
+    Write-Host "Review page opened: $reviewUrl"
+    Write-Host "Keep this window open while using OpenCode. Press Ctrl+C to stop the proxy."
+    Wait-Process -Id $serverProcess.Id
+} finally {
+    if (-not $serverProcess.HasExited) {
+        Stop-Process -Id $serverProcess.Id -Force
+    }
+}

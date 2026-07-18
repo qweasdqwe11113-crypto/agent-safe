@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import threading
@@ -34,7 +35,7 @@ from guard_core import (
     summarize_findings,
 )
 from model_client import ModelClient, ModelClientError
-from gateway_trace import GatewayTraceStore, extract_chat_text, extract_latest_user_text, extract_responses_text
+from gateway_trace import GatewayTraceStore, extract_chat_text, extract_current_user_text, extract_latest_user_text, extract_responses_text
 from session_state import SessionState, TurnRecord, append_turn, load_session, save_session_log
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -78,11 +79,55 @@ class SessionStore:
 
 
 class ReviewCoordinator:
-    def __init__(self, timeout_seconds: int = 900) -> None:
+    INTERRUPTED_STATUSES = {"pending", "approved", "sending"}
+
+    def __init__(self, base_dir: Path, timeout_seconds: int = 900) -> None:
+        self.base_dir = base_dir
+        self.base_dir.mkdir(parents=True, exist_ok=True)
         self.timeout_seconds = timeout_seconds
         self.lock = threading.RLock()
         self.reviews: dict[str, dict] = {}
         self.events: dict[str, threading.Event] = {}
+        self.active_request_keys: dict[str, str] = {}
+        self.session_sequences: dict[str, int] = {}
+        self._restore_reviews()
+
+    def _review_path(self, review_id: str) -> Path:
+        return self.base_dir / f"review-{review_id}.json"
+
+    def _persist_review(self, review: dict) -> None:
+        destination = self._review_path(review["review_id"])
+        temporary = destination.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(review, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(destination)
+
+    def _restore_reviews(self) -> None:
+        for path in self.base_dir.glob("review-*.json"):
+            try:
+                review = json.loads(path.read_text(encoding="utf-8"))
+                review_id = review["review_id"]
+            except (OSError, KeyError, json.JSONDecodeError):
+                continue
+            if review.get("status") in self.INTERRUPTED_STATUSES:
+                review.update(
+                    {
+                        "updated_at": datetime.now().isoformat(timespec="seconds"),
+                        "status": "interrupted",
+                        "error": "Proxy restarted before this review could finish.",
+                    }
+                )
+                self._persist_review(review)
+            self.reviews[review_id] = review
+            label = str(review.get("session_label", "OpenCode session"))
+            self.session_sequences[label] = max(self.session_sequences.get(label, 0), int(review.get("request_sequence", 0)))
+
+    def get_or_create_review(self, *, request_key: str, **kwargs) -> tuple[dict, bool]:
+        with self.lock:
+            existing_id = self.active_request_keys.get(request_key)
+            if existing_id in self.reviews:
+                return self.reviews[existing_id].copy(), False
+            review = self.create_review(request_key=request_key, **kwargs)
+            return review, True
 
     def create_review(
         self,
@@ -96,8 +141,12 @@ class ReviewCoordinator:
         risk_level: str,
         findings: list[dict[str, object]],
         session_label: str,
+        request_key: str = "",
     ) -> dict:
         review_id = uuid.uuid4().hex
+        with self.lock:
+            request_sequence = self.session_sequences.get(session_label, 0) + 1
+            self.session_sequences[session_label] = request_sequence
         review = {
             "review_id": review_id,
             "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -106,6 +155,8 @@ class ReviewCoordinator:
             "model": model,
             "profile": profile,
             "session_label": session_label,
+            "request_key": request_key,
+            "request_sequence": request_sequence,
             "original_text": original_text,
             "redacted_text": redacted_text,
             "suggested_action": suggested_action,
@@ -122,6 +173,9 @@ class ReviewCoordinator:
         with self.lock:
             self.reviews[review_id] = review
             self.events[review_id] = threading.Event()
+            if request_key:
+                self.active_request_keys[request_key] = review_id
+            self._persist_review(review)
         return review.copy()
 
     def list_reviews(self) -> list[dict]:
@@ -153,6 +207,7 @@ class ReviewCoordinator:
                     "override_reason": override_reason,
                 }
             )
+            self._persist_review(review)
             self.events[review_id].set()
             return review.copy(), None
 
@@ -170,6 +225,9 @@ class ReviewCoordinator:
             if review:
                 review["status"] = "sending"
                 review["updated_at"] = datetime.now().isoformat(timespec="seconds")
+                self._persist_review(review)
+                if review.get("request_key"):
+                    self.active_request_keys.pop(review["request_key"], None)
 
     def complete_review(
         self,
@@ -194,6 +252,7 @@ class ReviewCoordinator:
                         "error": error,
                     }
                 )
+                self._persist_review(review)
 
 
 class GatewayClientError(RuntimeError):
@@ -891,12 +950,16 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             }
 
         profile = self.server.gateway_profile
-        original_text = extract_latest_user_text(original_payload, route)
+        original_text = extract_current_user_text(original_payload, route)
+        if not original_text:
+            return {"payload": sanitized_payload, "token_map": token_map, "action": automatic_action, "review_id": None, "review": None}
         redacted_text = extract_latest_user_text(sanitized_payload, route)
         scan_result = scan_text(original_text, profile)
         headers = {key.lower(): value for key, value in self._request_headers_dict().items()}
         session_label = headers.get("x-opencode-session-id", "OpenCode session")
-        review = self.server.review_coordinator.create_review(
+        request_identity = json.dumps({"session": session_label, "route": route, "payload": original_payload}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        review, _ = self.server.review_coordinator.get_or_create_review(
+            request_key=hashlib.sha256(request_identity.encode("utf-8")).hexdigest(),
             route=route,
             model=str(original_payload.get("model", "")),
             profile=profile,
@@ -911,7 +974,7 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
         if decision is None:
             self._write_json(
                 HTTPStatus.REQUEST_TIMEOUT,
-                {"error": "Review confirmation timed out", "review_id": review["review_id"]},
+                {"error": {"message": "Review confirmation timed out", "type": "apg_review_timeout", "code": "APG_REVIEW_TIMEOUT", "review_id": review["review_id"]}},
             )
             return None
 
@@ -1737,7 +1800,7 @@ class GuardHTTPServer(ThreadingHTTPServer):
         self.gateway_client = gateway_client
         self.gateway_profile = gateway_profile
         self.trace_store = trace_store or GatewayTraceStore(session_store.base_dir / "gateway-traces")
-        self.review_coordinator = review_coordinator or ReviewCoordinator()
+        self.review_coordinator = review_coordinator or ReviewCoordinator(session_store.base_dir / "reviews")
         self.gateway_review_mode = gateway_review_mode
 
 
@@ -1747,6 +1810,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on.")
     parser.add_argument("--output-dir", default="outputs/api-sessions", help="Directory used to store session artifacts.")
     parser.add_argument("--trace-dir", default="outputs/gateway-traces", help="Directory used to store gateway traces.")
+    parser.add_argument("--review-dir", default="outputs/reviews", help="Directory used to store review decisions.")
     return parser.parse_args()
 
 
@@ -1767,7 +1831,7 @@ def main() -> int:
         gateway_client,
         gateway_profile,
         trace_store,
-        ReviewCoordinator(review_timeout_seconds),
+        ReviewCoordinator(Path(args.review_dir), review_timeout_seconds),
         gateway_review_mode,
     )
     print(f"Agent Privacy Guard API listening on http://{args.host}:{args.port}")
@@ -1777,6 +1841,7 @@ def main() -> int:
     print(f"Gateway review mode: {gateway_review_mode}")
     print(f"Session output dir: {Path(args.output_dir).resolve()}")
     print(f"Gateway trace dir: {Path(args.trace_dir).resolve()}")
+    print(f"Review log dir: {Path(args.review_dir).resolve()}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

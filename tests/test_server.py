@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from model_client import ModelClient
-from server import GatewayClient, GuardHTTPRequestHandler, GuardHTTPServer, SessionStore
+from server import GatewayClient, GuardHTTPRequestHandler, GuardHTTPServer, ReviewCoordinator, SessionStore
 
 
 class StubUpstreamHandler(BaseHTTPRequestHandler):
@@ -226,6 +226,28 @@ class ServerTests(unittest.TestCase):
         status, session_payload = self.request_json("GET", "/sessions/demo-session")
         self.assertEqual(status, 200)
         self.assertEqual(len(session_payload["turns"]), 1)
+
+    def test_restart_marks_unfinished_review_as_interrupted(self) -> None:
+        review_dir = Path(self.tmpdir.name) / "reviews"
+        coordinator = ReviewCoordinator(review_dir)
+        created = coordinator.create_review(
+            route="/chat/completions",
+            model="test-model",
+            profile="coding",
+            original_text="email=test@example.com",
+            redacted_text="email=[USER_EMAIL_1]",
+            suggested_action="mask",
+            risk_level="MEDIUM",
+            findings=[],
+            session_label="test-session",
+        )
+
+        restarted = ReviewCoordinator(review_dir)
+        restored = restarted.get_review(created["review_id"])
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(restored["status"], "interrupted")
+        self.assertIn("Proxy restarted", restored["error"])
 
     def test_confirm_requires_reason_for_override_and_logs_decision(self) -> None:
         self.request_json("POST", "/sessions", {"profile": "coding", "session_id": "review-session"})
