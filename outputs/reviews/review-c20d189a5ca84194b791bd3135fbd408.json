@@ -1,0 +1,32 @@
+{
+  "review_id": "c20d189a5ca84194b791bd3135fbd408",
+  "created_at": "2026-07-24T02:27:40",
+  "updated_at": "2026-07-24T02:27:50",
+  "route": "plugin/messages.transform",
+  "model": "OpenCode model",
+  "profile": "coding",
+  "session_label": "ses_06fc44dd3ffe7dqplBchs2KO1d",
+  "request_key": "2545fad11027897f1605d2537fd2a44fe587f9d9290847a3d838925434767b38",
+  "request_sequence": 1,
+  "original_text": "你好，我是小红",
+  "redacted_text": "你好，我是[PERSON_NAME_73b784]",
+  "suggested_action": "mask",
+  "risk_level": "MEDIUM",
+  "findings": [
+    {
+      "label": "PERSON_NAME",
+      "display_name": "Person Name",
+      "count": 1
+    }
+  ],
+  "token_map": {
+    "[PERSON_NAME_73b784]": "小红"
+  },
+  "status": "completed",
+  "final_action": "mask",
+  "is_override": false,
+  "override_reason": "",
+  "cloud_response": "你好，[PERSON_NAME_73b784]。我可以协助你阅读、修改和验证这个项目中的代码。",
+  "restored_response": "你好，小红。我可以协助你阅读、修改和验证这个项目中的代码。",
+  "error": ""
+}

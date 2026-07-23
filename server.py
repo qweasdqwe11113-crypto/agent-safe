@@ -142,6 +142,7 @@ class ReviewCoordinator:
         findings: list[dict[str, object]],
         session_label: str,
         request_key: str = "",
+        token_map: dict[str, str] | None = None,
     ) -> dict:
         review_id = uuid.uuid4().hex
         with self.lock:
@@ -162,6 +163,7 @@ class ReviewCoordinator:
             "suggested_action": suggested_action,
             "risk_level": risk_level,
             "findings": findings,
+            "token_map": token_map or {},
             "status": "pending",
             "final_action": "",
             "is_override": False,
@@ -866,6 +868,18 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             self._handle_gateway_chat_completions(payload)
             return
 
+        if path == "/plugin/reviews":
+            payload = self._read_json_body()
+            if payload is not None:
+                self._handle_plugin_review(payload)
+            return
+
+        if path.startswith("/plugin/reviews/") and path.endswith("/output"):
+            payload = self._read_json_body()
+            if payload is not None:
+                self._handle_plugin_output(path.split("/")[3], payload)
+            return
+
         if path == "/sessions":
             payload = self._read_json_body()
             if payload is None:
@@ -998,6 +1012,38 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
             "review_id": review["review_id"],
             "review": decision,
         }
+
+    def _handle_plugin_review(self, payload: dict) -> None:
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "text must be a non-empty string"})
+            return
+        session_label = str(payload.get("session_id") or "OpenCode session")
+        scan_result = scan_text(text, self.server.gateway_profile)
+        request_key = hashlib.sha256(f"plugin:{session_label}:{text}".encode("utf-8")).hexdigest()
+        review, _ = self.server.review_coordinator.get_or_create_review(
+            request_key=request_key, route="plugin/messages.transform", model=str(payload.get("model", "OpenCode model")),
+            profile=self.server.gateway_profile, original_text=text, redacted_text=scan_result.redacted_text,
+            suggested_action=scan_result.suggested_action, risk_level=RISK_LEVELS[scan_result.suggested_action],
+            findings=build_findings(scan_result), session_label=session_label,
+            token_map=scan_result.token_map,
+        )
+        self._write_json(HTTPStatus.CREATED, review)
+
+    def _handle_plugin_output(self, review_id: str, payload: dict) -> None:
+        text = payload.get("text")
+        if not isinstance(text, str):
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "text must be a string"})
+            return
+        review = self.server.review_coordinator.get_review(review_id)
+        if review is None:
+            self._write_json(HTTPStatus.NOT_FOUND, {"error": "Review not found"})
+            return
+        restored = restore_response(text, review.get("token_map", {}))
+        self.server.review_coordinator.complete_review(
+            review_id, status="completed", cloud_response=text, restored_response=restored
+        )
+        self._write_json(HTTPStatus.OK, {"review_id": review_id, "restored_response": restored})
 
     def _handle_gateway_responses(self, payload: dict) -> None:
         if payload.get("stream") is True:

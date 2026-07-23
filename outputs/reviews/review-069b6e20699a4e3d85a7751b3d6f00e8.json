@@ -1,0 +1,32 @@
+{
+  "review_id": "069b6e20699a4e3d85a7751b3d6f00e8",
+  "created_at": "2026-07-24T02:13:51",
+  "updated_at": "2026-07-24T02:27:11",
+  "route": "plugin/messages.transform",
+  "model": "OpenCode model",
+  "profile": "coding",
+  "session_label": "ses_06fd0f1e8ffe1gv2YITz3IvrRt",
+  "request_key": "8de8ace19b8186e3cfb9e6c83df06431ca319c7098582d27dad7ec5a5dcf6cde",
+  "request_sequence": 1,
+  "original_text": "你好我叫李明华",
+  "redacted_text": "你好我叫[PERSON_NAME_0af1b7]",
+  "suggested_action": "mask",
+  "risk_level": "MEDIUM",
+  "findings": [
+    {
+      "label": "PERSON_NAME",
+      "display_name": "Person Name",
+      "count": 1
+    }
+  ],
+  "token_map": {
+    "[PERSON_NAME_0af1b7]": "李明华"
+  },
+  "status": "interrupted",
+  "final_action": "mask",
+  "is_override": false,
+  "override_reason": "",
+  "cloud_response": "",
+  "restored_response": "",
+  "error": "Proxy restarted before this review could finish."
+}

@@ -94,7 +94,7 @@
     </div>
   </main>
   <script>
-    const $=(id)=>document.getElementById(id); let reviews=[]; let selectedId=""; let lastSuggested="";
+    const $=(id)=>document.getElementById(id); let reviews=[]; let selectedId=""; let lastSuggested=""; let editingReviewId="";
     const esc=(value)=>value==null?"":String(value);
     function badge(text,className=""){const el=document.createElement("span");el.className=`badge ${className}`;el.textContent=text;return el;}
     function selectedAction(){return document.querySelector('input[name="action"]:checked')?.value||"";}
