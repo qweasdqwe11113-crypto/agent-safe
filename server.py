@@ -190,6 +190,17 @@ class ReviewCoordinator:
             review = self.reviews.get(review_id)
             return review.copy() if review else None
 
+    def merge_token_map(self, review_id: str, token_map: dict[str, str]) -> dict | None:
+        """Persist additional local placeholders needed to restore a turn."""
+        with self.lock:
+            review = self.reviews.get(review_id)
+            if review is None:
+                return None
+            review.setdefault("token_map", {}).update(token_map)
+            review["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            self._persist_review(review)
+            return review.copy()
+
     def decide(self, review_id: str, final_action: str, override_reason: str) -> tuple[dict | None, str | None]:
         with self.lock:
             review = self.reviews.get(review_id)
@@ -1021,8 +1032,9 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
         session_label = str(payload.get("session_id") or "OpenCode session")
         scan_result = scan_text(text, self.server.gateway_profile)
         request_key = hashlib.sha256(f"plugin:{session_label}:{text}".encode("utf-8")).hexdigest()
+        route = str(payload.get("route", "plugin/messages.transform"))
         review, _ = self.server.review_coordinator.get_or_create_review(
-            request_key=request_key, route="plugin/messages.transform", model=str(payload.get("model", "OpenCode model")),
+            request_key=request_key, route=route, model=str(payload.get("model", "OpenCode model")),
             profile=self.server.gateway_profile, original_text=text, redacted_text=scan_result.redacted_text,
             suggested_action=scan_result.suggested_action, risk_level=RISK_LEVELS[scan_result.suggested_action],
             findings=build_findings(scan_result), session_label=session_label,
@@ -1035,7 +1047,11 @@ class GuardHTTPRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(text, str):
             self._write_json(HTTPStatus.BAD_REQUEST, {"error": "text must be a string"})
             return
-        review = self.server.review_coordinator.get_review(review_id)
+        token_map = payload.get("token_map", {})
+        if not isinstance(token_map, dict) or not all(isinstance(key, str) and isinstance(value, str) for key, value in token_map.items()):
+            self._write_json(HTTPStatus.BAD_REQUEST, {"error": "token_map must be a string-to-string object"})
+            return
+        review = self.server.review_coordinator.merge_token_map(review_id, token_map)
         if review is None:
             self._write_json(HTTPStatus.NOT_FOUND, {"error": "Review not found"})
             return

@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 if (-not $env:APG_UPSTREAM_BASE_URL) {
-    $env:APG_UPSTREAM_BASE_URL = "https://www.right.codes/codex/v1"
+    $env:APG_UPSTREAM_BASE_URL = "https://www.rightapi.ai/codex/v1"
 }
 
 $env:APG_GATEWAY_REVIEW_MODE = "review-first"

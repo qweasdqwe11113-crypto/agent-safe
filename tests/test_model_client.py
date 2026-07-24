@@ -45,12 +45,12 @@ class ModelClientTests(unittest.TestCase):
                 'model = "gpt-5.4"\n'
                 "[model_providers]\n"
                 "[model_providers.rightcode]\n"
-                'base_url = "https://www.right.codes/codex/v1"\n'
+                'base_url = "https://www.rightapi.ai/codex/v1"\n'
             ),
         ):
             config = load_codex_provider_config("rightcode", Path("dummy.toml"))
 
-        self.assertEqual(config["base_url"], "https://www.right.codes/codex/v1")
+        self.assertEqual(config["base_url"], "https://www.rightapi.ai/codex/v1")
         self.assertEqual(config["model"], "gpt-5.4")
 
     def test_from_env_uses_rightcode_config_defaults(self) -> None:
@@ -63,12 +63,12 @@ class ModelClientTests(unittest.TestCase):
             clear=True,
         ), patch(
             "model_client.load_codex_provider_config",
-            return_value={"base_url": "https://www.right.codes/codex/v1", "model": "gpt-5.4"},
+            return_value={"base_url": "https://www.rightapi.ai/codex/v1", "model": "gpt-5.4"},
         ):
             client = ModelClient.from_env()
 
         self.assertEqual(client.provider, "rightcode")
-        self.assertEqual(client.base_url, "https://www.right.codes/codex/v1")
+        self.assertEqual(client.base_url, "https://www.rightapi.ai/codex/v1")
         self.assertEqual(client.model, "gpt-5.4")
         self.assertEqual(client.api_key, "demo-key")
 
@@ -79,7 +79,7 @@ class ModelClientTests(unittest.TestCase):
             provider="rightcode",
             model="gpt-5.4",
             api_key="demo-key",
-            base_url="https://www.right.codes/codex/v1",
+            base_url="https://www.rightapi.ai/codex/v1",
         )
 
         class DummyResponse:

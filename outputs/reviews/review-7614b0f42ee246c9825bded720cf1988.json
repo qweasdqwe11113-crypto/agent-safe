@@ -1,0 +1,32 @@
+{
+  "review_id": "7614b0f42ee246c9825bded720cf1988",
+  "created_at": "2026-07-24T23:02:30",
+  "updated_at": "2026-07-24T23:02:41",
+  "route": "plugin/messages.transform",
+  "model": "OpenCode model",
+  "profile": "coding",
+  "session_label": "ses_06b59c576ffeIz6CuEvGPlHRXR",
+  "request_key": "f98e0869a26fd66388a1c378415375a29345c566ab7db498bb64d03aa2733b9b",
+  "request_sequence": 1,
+  "original_text": "你好我叫李华",
+  "redacted_text": "你好我叫[PERSON_NAME_ba9d5f]",
+  "suggested_action": "mask",
+  "risk_level": "MEDIUM",
+  "findings": [
+    {
+      "label": "PERSON_NAME",
+      "display_name": "Person Name",
+      "count": 1
+    }
+  ],
+  "token_map": {
+    "[PERSON_NAME_ba9d5f]": "李华"
+  },
+  "status": "completed",
+  "final_action": "allow",
+  "is_override": true,
+  "override_reason": "111",
+  "cloud_response": "你好，李华！有什么想一起处理的吗？",
+  "restored_response": "你好，李华！有什么想一起处理的吗？",
+  "error": ""
+}
